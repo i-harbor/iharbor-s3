@@ -1,0 +1,18 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+django = "==2.2.12"
+concurrent-log-handler = "==0.9.16"
+djangorestframework = "==3.10.2"
+mysqlclient = "==1.4.4"
+uwsgi = "==2.0.18"
+djangorestframework-xml = "==2.0.0"
+django-hosts = "==4.0"
+
+[requires]
+python_version = "3.6"
