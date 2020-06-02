@@ -486,7 +486,7 @@ class BucketFileBase(models.Model):
     def obj_size(self):
         return self.si
 
-    def set_shared(self, share=SHARE_ACCESS_NO, days=0, password:str=''):
+    def set_shared(self, share=SHARE_ACCESS_NO, days=0, password: str = ''):
         """
         设置对象共享或私有权限
 

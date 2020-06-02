@@ -1,7 +1,11 @@
+import base64
+
 from django.utils.translation import gettext as _
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.serializers import ValidationError
+from rest_framework.exceptions import UnsupportedMediaType
+from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
 from .renders import CusXMLRenderer
@@ -10,6 +14,10 @@ from .validators import DNSStringValidator, bucket_limit_validator
 from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_for_model_class,
                     delete_table_for_model_class)
 from . import exceptions
+from .harbor import HarborManager
+from utils.storagers import FileUploadToCephHandler
+from utils.oss.pyrados import HarborObject
+from buckets.models import BucketFileBase
 
 
 class BucketViewSet(CustomGenericViewSet):
@@ -18,7 +26,14 @@ class BucketViewSet(CustomGenericViewSet):
     def list(self, request, *args, **kwargs):
         """
         list objects (v1 && v2)
+        get object metadata
         """
+        prefix = request.query_params.get('Prefix', None)
+        if not prefix:
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3InvalidArgument(message=_('无效的参数Prefix'))
+            return Response(data=e.err_data(), status=e.status_code)
+
         return Response(data={'msg': 'list objects'}, status=status.HTTP_400_BAD_REQUEST)
 
     def update(self, request, *args, **kwargs):
@@ -42,6 +57,28 @@ class BucketViewSet(CustomGenericViewSet):
         """
         delete bucket
         """
+        bucket_name = self.get_bucket_name(request)
+        if not bucket_name:
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3InvalidRequest('Invalid request domain name')
+            return Response(data=e.err_data(), status=e.status_code)
+
+        bucket = Bucket.get_bucket_by_name(bucket_name)
+        if not bucket_name:
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3NoSuchKey('Invalid request domain name')
+            return Response(data=e.err_data(), status=e.status_code)
+
+        if not bucket.check_user_own_bucket(user=request.user):
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3AccessDenied()
+            return Response(data=e.err_data(), status=e.status_code)
+
+        if not bucket.delete_and_archive():  # 删除归档
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3InternalError(_('删除存储桶失败'))
+            return Response(data=e.err_data(), status=e.status_code)
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @staticmethod
@@ -89,7 +126,9 @@ class BucketViewSet(CustomGenericViewSet):
         acl_choices = {'private': Bucket.PRIVATE, 'public-read': Bucket.PUBLIC, 'public-read-write': Bucket.PUBLIC_READWRITE}
         acl = request.headers.get('x-amz-acl', 'private').lower()
         if acl not in acl_choices:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+            e = exceptions.S3InvalidRequest('The value of header "x-amz-acl" is invalid and unsupported.')
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            return Response(data=e.err_data(), status=e.status_code)
 
         try:
             bucket_name = self.validate_create_bucket(request, bucket_name)
@@ -115,6 +154,7 @@ class BucketViewSet(CustomGenericViewSet):
             if not create_table_for_model_class(model=model_class):
                 bucket.delete()
                 delete_table_for_model_class(model=model_class)
+
                 self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
                 e = exceptions.S3InternalError(message=_('创建存储桶失败，存储桶表错误'))
                 return Response(data=e.err_data(), status=e.status_code)
@@ -129,3 +169,123 @@ class ObjViewSet(CustomGenericViewSet):
         bucket_name = self.get_bucket_name(request)
         obj_path_name = self.get_obj_path_name(request)
         return Response(data={'bucket_name': bucket_name, 'obj_path_name': obj_path_name}, status=status.HTTP_200_OK)
+
+    def update(self, request, *args, **kwargs):
+        """
+        put object
+        """
+        return self.put_object(request, args, kwargs)
+
+    def put_object(self, request, args, kwargs):
+        bucket_name = self.get_bucket_name(request)
+        obj_path_name = self.get_obj_path_name(request)
+
+        # 访问权限
+        acl_choices = {'private': BucketFileBase.SHARE_ACCESS_NO, 'public-read': BucketFileBase.SHARE_ACCESS_READONLY,
+                       'public-read-write': BucketFileBase.SHARE_ACCESS_READWRITE}
+        x_amz_acl = request.headers.get('X-Amz-Acl', 'private').lower()
+        if x_amz_acl not in acl_choices:
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            e = exceptions.S3InvalidRequest(f'The value {x_amz_acl} of header "x-amz-acl" is not supported.')
+            return Response(data=e.err_data(), status=e.status_code)
+
+        h_manager = HarborManager()
+        try:
+            bucket, obj, created = h_manager.create_empty_obj(bucket_name=bucket_name, obj_path=obj_path_name,
+                                                              user=request.user)
+        except exceptions.S3Error as e:
+            self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+            return Response(data=e.err_data(), status=e.status_code)
+
+        if x_amz_acl != 'private':
+            share_code = acl_choices[x_amz_acl]
+            obj.set_shared(share=share_code)
+
+        pool_name = bucket.get_pool_name()
+        obj_key = obj.get_obj_key(bucket.id)
+
+        rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        if created is False:  # 对象已存在，不是新建的
+            try:
+                h_manager._pre_reset_upload(obj=obj, rados=rados)  # 重置对象大小
+            except Exception as exc:
+                self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+                e = exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
+                return Response(data=e.err_data(), status=e.status_code)
+
+        return self.put_object_handle(request=request, bucket=bucket, obj=obj, rados=rados, created=created)
+
+    def put_object_handle(self, request, bucket, obj, rados, created):
+        pool_name = bucket.get_pool_name()
+        obj_key = obj.get_obj_key(bucket.id)
+        uploader = FileUploadToCephHandler(request, pool_name=pool_name, obj_key=obj_key)
+        request.upload_handlers = [uploader]
+
+        def clean_put(uploader, obj, created):
+            # 删除数据和元数据
+            f = getattr(uploader, 'file', None)
+            s = f.size if f else 0
+            rados.delete(obj_size=s)
+            if created:
+                obj.delete()
+
+        try:
+            self.kwargs['filename'] = 'filename'
+            put_data = request.data
+        except UnsupportedMediaType:
+            clean_put(uploader, obj, created)
+            return self.exception_response(request, exceptions.S3RequestIsNotMultiPartContent())
+        except Exception as exc:
+            clean_put(uploader, obj, created)
+            return self.exception_response(request, exceptions.S3InvalidRequest(str(exc)))
+
+        file = put_data.get('file')
+        if not file:
+            clean_put(uploader, obj, created)
+            return self.exception_response(request, exceptions.S3InvalidRequest('Request body is empty.'))
+
+        content_b64_md5 = self.request.headers.get('Content-MD5', '')
+        obj_md5 = file.file_md5
+        if content_b64_md5:
+            bytes_md5 = file.md5_handler.digest()
+            base64_md5 = base64.b64encode(bytes_md5).decode('ascii')
+            if content_b64_md5 != base64_md5:
+                # 删除数据和元数据
+                clean_put(uploader, obj, created)
+                return self.exception_response(request, exceptions.S3InvalidDigest())
+
+        try:
+            obj.si = file.size
+            obj.md5 = obj_md5
+            obj.save(update_fields=['si', 'md5'])
+        except Exception as e:
+            # 删除数据和元数据
+            clean_put(uploader, obj, created)
+            return self.exception_response(request, exceptions.S3InternalError('更新对象元数据错误'))
+
+        headers = {'ETag': obj_md5}
+        x_amz_acl = request.headers.get('x-amz-acl', None)
+        if x_amz_acl:
+            headers['X-Amz-Acl'] = x_amz_acl
+        return Response(status=status.HTTP_200_OK, headers=headers)
+
+    def exception_response(self, request, exc):
+        """
+        异常回复
+
+        :param request:
+        :param exc: S3Error()
+        :return: Response()
+        """
+        self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+        return Response(data=exc.err_data(), status=exc.status_code)
+
+    def get_parsers(self):
+        """
+        动态分配请求体解析器
+        """
+        method = self.request.method.lower()
+        if method == 'put':                     # put_object
+            return [FileUploadParser()]
+
+        return super().get_parsers()

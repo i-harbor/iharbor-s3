@@ -11,6 +11,8 @@ from django.apps import apps
 from django.conf import settings
 
 from buckets.models import BucketFileBase, get_str_hexMD5
+from utils.storagers import PathParser
+from . import exceptions
 
 
 logger = logging.getLogger('django.request')
@@ -144,6 +146,14 @@ class BucketFileManagement:
             self._bucket_file_class = self.creat_obj_model_class()
 
         return self._bucket_file_class
+
+    def root_dir(self):
+        """
+        根目录对象
+        :return:
+        """
+        c = self.get_obj_model_class()
+        return c(id=self.ROOT_DIR_ID, na='', name='')
 
     def get_collection_name(self):
         return self._collection_name
@@ -400,3 +410,4 @@ class BucketFileManagement:
             raise Exception(msg)
 
         return obj
+

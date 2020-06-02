@@ -14,10 +14,13 @@ class S3Error(Exception):
         self.status_code = self.default_status_code if status_code is None else status_code
 
     def __repr__(self):
-        return f'S3Error(message={self.message}, code={self.code}, status_code={self.status_code})'
+        return f'{type(self)}(message={self.message}, code={self.code}, status_code={self.status_code})'
 
     def __str__(self):
         return self.message
+
+    def detail_str(self):
+        return self.__repr__()
 
     def err_data(self):
         return {
@@ -38,7 +41,7 @@ class S3InvalidRequest(S3Error):
 
 class S3NotFound(S3Error):
     default_message = 'Not found'
-    default_code = 'Not found'
+    default_code = 'Notfound'
     default_status_code = 404
 
 
@@ -56,6 +59,12 @@ class S3MethodNotAllowed(S3Error):
     default_message = 'The specified method is not allowed against this resource.'
     default_code = 'MethodNotAllowed'
     default_status_code = 405
+
+
+class S3InvalidSuchKey(S3Error):
+    default_message = "The specified object key is not valid."
+    default_code = 'InvalidSuchKey'
+    default_status_code = 400
 
 
 class S3InvalidRange(S3Error):
@@ -170,3 +179,37 @@ class S3TooManyBuckets(S3Error):
     default_status_code = 400
 
 
+class S3CredentialsNotSupported(S3Error):
+    default_message = "This request does not support credentials."
+    default_code = 'CredentialsNotSupported'
+    default_status_code = 400
+
+
+class DirectoryAlreadyExists(S3Error):
+    default_message = "Directory already exists."
+    default_code = 'DirectoryAlreadyExists'
+    default_status_code = 400
+
+
+class ObjectKeyAlreadyExists(S3Error):
+    default_message = 'The specified key already exists.'
+    default_code = 'ObjectKeyAlreadyExists'
+    default_status_code = 400
+
+
+class S3IncompleteBody(S3Error):
+    default_message = "You did not provide the number of bytes specified by the Content-Length HTTP header."
+    default_code = 'IncompleteBody'
+    default_status_code = 400
+
+
+class S3MissingContentLength(S3Error):
+    default_message = "You must provide the Content-Length HTTP header."
+    default_code = 'MissingContentLength'
+    default_status_code = 411
+
+
+class S3RequestIsNotMultiPartContent(S3Error):
+    default_message = "Bucket POST must be of the enclosure-type multipart/form-data."
+    default_code = 'RequestIsNotMultiPartContent'
+    default_status_code = 411

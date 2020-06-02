@@ -1,25 +1,12 @@
 from django.utils import timezone
 from django.db.models import Case, Value, When, F
-from rest_framework import status
 
 from buckets.models import Bucket
 from .utils import BucketFileManagement
 from utils.storagers import PathParser
 from utils.oss import HarborObject, get_size
 from .paginations import BucketFileLimitOffsetPagination
-
-
-class HarborError(BaseException):
-    def __init__(self, code: int, msg: str, **kwargs):
-        self.code = code if code else 500   # 错误码
-        self.msg = msg      # 错误描述
-        self.data = kwargs  # 一些希望传递的数据
-
-    def __str__(self):
-        return self.detail()
-
-    def detail(self):
-        return f'{self.code},{self.msg}'
+from . import exceptions
 
 
 class HarborManager:
@@ -81,7 +68,7 @@ class HarborManager:
             true: is dir
             false: is file
 
-        :raise HarborError  # 桶或路径不存在，发生错误
+        :raises: S3Error  # 桶或路径不存在，发生错误
         """
         # path为空或根目录时
         if not path_name or path_name == '/':
@@ -102,7 +89,7 @@ class HarborManager:
             true: is file
             false: is dir
 
-        :raise HarborError  # 桶或路径不存在，发生错误
+        :raise S3Error  # 桶或路径不存在，发生错误
         """
         # path为空或根目录时
         if not path_name or path_name == '/':
@@ -124,11 +111,11 @@ class HarborManager:
         :return:
             obj or dir    # 对象或目录实例
 
-        :raise HarborError
+        :raise S3Error
         """
         bucket, obj = self.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path_name, user=user)
         if obj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='指定对象或目录不存在')
+            raise exceptions.S3NoSuchKey('指定对象或目录不存在')
 
         return obj
 
@@ -141,13 +128,13 @@ class HarborManager:
         :return:
             obj     #
             None    #
-        :raises: HarborError
+        :raises: S3Error
         """
         bfm = BucketFileManagement(collection_name=table_name)
         try:
             obj = bfm.get_obj(path=path)
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=str(e))
+            raise exceptions.S3InternalError(str(e))
         if obj:
             return obj
         return None
@@ -166,13 +153,13 @@ class HarborManager:
             None, bfm  # 目录或对象不存在
             raise Exception    # 父目录路径错误，不存在
 
-        :raises: HarborError
+        :raises: S3Error
         """
         bfm = BucketFileManagement(path=path, collection_name=table_name)
         try:
             obj = bfm.get_dir_or_obj_exists(name=name)
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=str(e))
+            raise exceptions.S3InternalError(str(e))
 
         if obj:
             return obj, bfm   # 目录或对象存在
@@ -190,10 +177,37 @@ class HarborManager:
             raise Exception    # 父目录路径错误，不存在
             obj or None: 目录或对象不存在
 
-        :raises: HarborError
+        :raises: S3Error
         """
         obj, _ = self._get_obj_or_dir_and_bfm(table_name, path, name)
         return obj
+
+    @staticmethod
+    def mkdir_metadata(table_name: str, p_id: int, dir_path_name: str):
+        """
+        创建目录元数据
+
+        :param table_name: 目录所在存储桶对应的数据库表名
+        :param p_id: 父目录id
+        :param dir_path_name: 目录全路径
+        :return:
+            dir对象
+
+        :raises: S3Error
+        """
+        _, dir_name = PathParser(dir_path_name).get_path_and_filename()
+        bfm = BucketFileManagement(collection_name=table_name)
+        object_class = bfm.get_obj_model_class()
+        dir1 = object_class(na=dir_path_name,  # 全路经目录名
+                            name=dir_name,  # 目录名
+                            fod=False,  # 目录
+                            did=p_id)     # 父目录id
+        try:
+            dir1.save(force_insert=True)  # 仅尝试创建文档，不修改已存在文档
+        except Exception as e:
+            raise exceptions.S3InternalError('创建目录元数据错误')
+
+        return dir1
 
     def mkdir(self, bucket_name: str, path: str, user=None):
         """
@@ -204,31 +218,15 @@ class HarborManager:
         :return:
             True, dir: success
             raise HarborError: failed
-        :raise HarborError
+
+        :raise S3Error
         """
         validated_data = self.validate_mkdir_params(bucket_name, path, user)
-
-        dir_path = validated_data.get('dir_path', '')
-        dir_name = validated_data.get('dir_name', '')
         did = validated_data.get('did', None)
         collection_name = validated_data.get('collection_name')
 
-        bfm = BucketFileManagement(dir_path, collection_name=collection_name)
-        dir_path_name = bfm.build_dir_full_name(dir_name)
-        BucketFileClass = bfm.get_obj_model_class()
-        bfinfo = BucketFileClass(na=dir_path_name,  # 全路经目录名
-                                 name=dir_name,  # 目录名
-                                 fod=False,  # 目录
-                                 )
-        # 有父节点
-        if did:
-            bfinfo.did = did
-        try:
-            bfinfo.save(force_insert=True)  # 仅尝试创建文档，不修改已存在文档
-        except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='创建失败，数据库错误')
-
-        return True, bfinfo
+        dir1 = self.mkdir_metadata(table_name=collection_name, p_id=did, dir_path_name=path)
+        return True, dir1
 
     def validate_mkdir_params(self, bucket_name: str, dirpath: str, user=None):
         """
@@ -244,41 +242,93 @@ class HarborManager:
         dir_path, dir_name = PathParser(filepath=dirpath).get_path_and_filename()
 
         if not bucket_name or not dir_name:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='目录路径参数无效，要同时包含有效的存储桶和目录名称')
+            raise exceptions.S3InvalidRequest('目录路径参数无效，要同时包含有效的存储桶和目录名称')
 
         if '/' in dir_name:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='目录名称不能包含‘/’')
+            raise exceptions.S3InvalidRequest('目录名称不能包含‘/’')
 
         if len(dir_name) > 255:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='目录名称长度最大为255字符')
+            raise exceptions.S3InvalidRequest('目录名称长度最大为255字符')
 
         # bucket是否属于当前用户,检测存储桶名称是否存在
         bucket = self.get_bucket(bucket_name, user=user)
         if not isinstance(bucket, Bucket):
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket()
 
         _collection_name = bucket.get_bucket_table_name()
         data['collection_name'] = _collection_name
 
-        try:
-            dir, bfm = self._get_obj_or_dir_and_bfm(table_name=_collection_name, path=dir_path, name=dir_name)
-        except HarborError as e:
-            raise e
+        dir1, bfm = self._get_obj_or_dir_and_bfm(table_name=_collection_name, path=dir_path, name=dir_name)
 
-        if dir:
+        if dir1:
             # 目录已存在
-            if dir.is_dir():
-                raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg=f'"{dir_name}"目录已存在', existing=True)
+            if dir1.is_dir():
+                raise exceptions.DirectoryAlreadyExists(f'"{dir_name}"目录已存在')
 
             # 同名对象已存在
-            if dir.is_file():
-                raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg=f'"指定目录名称{dir_name}"已存在重名对象，请重新指定一个目录名称')
+            if dir1.is_file():
+                raise exceptions.ObjectKeyAlreadyExists(f'"指定目录名称{dir_name}"已存在重名对象，请重新指定一个目录名称')
 
         data['did'] = bfm.cur_dir_id if bfm.cur_dir_id else bfm.get_cur_dir_id()[-1]
         data['bucket_name'] = bucket_name
         data['dir_path'] = dir_path
         data['dir_name'] = dir_name
         return data
+
+    def create_path(self, table_name, path: str):
+        """
+        创建整个目录路径
+
+        :param table_name: 桶的数据库表明称
+        :param path: 要创建的目录路径字符串
+        :return:
+            [dir,]      # 创建的目录路径上的目录(只包含新建的目录和路径上最后一个目录)的列表
+
+        :raises: S3Error
+        """
+        bfm = BucketFileManagement(collection_name=table_name)
+        paths = PathParser(path).get_path_breadcrumb()
+        if len(paths) == 0:
+            return bfm.root_dir()       # 根目录对象
+
+        index_paths = list(enumerate(paths))
+        index = 0
+        last_exist_dir = None       # 路径中已存在的最后的目录
+        for index, item in reversed(index_paths):
+            dir_name, dir_path_name = item
+            try:
+                obj = bfm.get_obj(path=dir_path_name)
+            except Exception as e:
+                raise exceptions.S3InternalError(str(e))
+            if not obj:
+                continue
+
+            if obj.is_file():
+                raise exceptions.S3InvalidSuchKey("The path of the object's key conflicts with the existing object's key")
+
+            last_exist_dir = obj
+            break
+
+        if index == (len(index_paths) - 1) and last_exist_dir:       # 整个路径已存在
+            return [last_exist_dir]
+
+        # 从整个路径上已存在的目录处开始向后创建路径
+        if last_exist_dir:
+            now_last_dir = last_exist_dir           # 记录现在已创建的路径上的最后的目录
+            create_paths = index_paths[index + 1:]  # index目录存在不需创建
+        else:
+            now_last_dir = bfm.root_dir()           # 根目录对象
+            create_paths = index_paths[index:]      # index目录不存在需创建
+
+        dirs = []
+        for i, p in create_paths:
+            p_id = now_last_dir.id
+            dir_name, dir_path_name = p
+            dir1 = self.mkdir_metadata(table_name=table_name, p_id=p_id, dir_path_name=dir_path_name)
+            dirs.append(dir1)
+            now_last_dir = dir1
+
+        return dirs
 
     def rmdir(self, bucket_name: str, dirpath: str, user=None):
         """
@@ -295,28 +345,24 @@ class HarborManager:
         path, dir_name = PathParser(filepath=dirpath).get_path_and_filename()
 
         if not bucket_name or not dir_name:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数无效')
+            raise exceptions.S3InvalidRequest('参数无效')
 
         # bucket是否属于当前用户,检测存储桶名称是否存在
         bucket = self.get_bucket(bucket_name, user=user)
         if not isinstance(bucket, Bucket):
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
 
         table_name = bucket.get_bucket_table_name()
-
-        try:
-            dir, bfm = self._get_obj_or_dir_and_bfm(table_name=table_name, path=path, name=dir_name)
-        except HarborError as e:
-            raise e
+        dir1, bfm = self._get_obj_or_dir_and_bfm(table_name=table_name, path=path, name=dir_name)
 
         if not dir or dir.is_file():
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='目录不存在')
+            raise exceptions.S3NoSuchKey('目录不存在')
 
         if not bfm.dir_is_empty(dir):
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='无法删除非空目录')
+            raise exceptions.S3InvalidRequest('无法删除非空目录')
 
         if not dir.do_delete():
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='删除目录失败，数据库错误')
+            raise exceptions.S3InternalError('删除目录元数据失败')
 
         return True
 
@@ -335,13 +381,13 @@ class HarborManager:
         """
         bucket = self.get_bucket(bucket_name, user)
         if not bucket:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
 
         collection_name = bucket.get_bucket_table_name()
         bfm = BucketFileManagement(path=path, collection_name=collection_name)
         ok, qs = bfm.get_cur_dir_files()
         if not ok:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='未找到相关记录')
+            raise exceptions.S3NotFound('未找到相关记录')
         return qs, bucket
 
     def list_dir_generator(self, bucket_name: str, path: str, per_num: int = 1000, user=None, paginator=None):
@@ -374,7 +420,7 @@ class HarborManager:
                 try:
                     ret = paginator.pagenate_to_list(queryset, offset=offset, limit=limit)
                 except Exception as e:
-                    raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=str(e))
+                    raise exceptions.S3InternalError(str(e))
 
                 yield ret
                 l = len(ret)
@@ -418,11 +464,11 @@ class HarborManager:
         try:
             l = paginator.pagenate_to_list(files, offset=offset, limit=limit)
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=str(e))
+            raise exceptions.S3InternalError(str(e))
 
         return l, bucket
 
-    def move_rename(self, bucket_name:str, obj_path:str, rename=None, move=None, user=None):
+    def move_rename(self, bucket_name: str, obj_path: str, rename=None, move=None, user=None):
         """
         移动或重命名对象
 
@@ -439,20 +485,16 @@ class HarborManager:
         """
         path, filename = PathParser(filepath=obj_path).get_path_and_filename()
         if not bucket_name or not filename:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         move_to, rename = self._validate_move_rename_params(move_to=move, rename=rename)
         if move_to is None and rename is None:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='请至少提交一个要执行操作的参数')
+            raise exceptions.S3InvalidRequest('请至少提交一个要执行操作的参数')
 
         # 存储桶验证和获取桶对象
-        try:
-            bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
-        except HarborError as e:
-            raise e
-
+        bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
         if obj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='文件对象不存在')
+            raise exceptions.S3NoSuchKey('文件对象不存在')
 
         return self._move_rename_obj(bucket=bucket, obj=obj, move_to=move_to, rename=rename)
 
@@ -475,24 +517,24 @@ class HarborManager:
 
         # 检查是否符合移动或重命名条件，目标路径下是否已存在同名对象或子目录
         try:
-            if move_to is None: # 仅仅重命名对象，不移动
-                bfm = BucketFileManagement( collection_name=table_name)
+            if move_to is None:     # 仅仅重命名对象，不移动
+                bfm = BucketFileManagement(collection_name=table_name)
                 target_obj = bfm.get_dir_or_obj_exists(name=new_obj_name, cur_dir_id=obj.did)
             else: # 需要移动对象
                 bfm = BucketFileManagement(path=move_to, collection_name=table_name)
                 target_obj = bfm.get_dir_or_obj_exists(name=new_obj_name)
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg= '移动对象操作失败, 查询是否已存在同名对象或子目录时发生错误')
+            raise exceptions.S3InternalError('移动对象操作失败, 查询是否已存在同名对象或子目录时发生错误')
 
         if target_obj:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='无法完成对象的移动操作，指定的目标路径下已存在同名的对象或目录')
+            raise exceptions.S3InvalidRequest('无法完成对象的移动操作，指定的目标路径下已存在同名的对象或目录')
 
         # 仅仅重命名对象，不移动
         if move_to is None:
             path, _ = PathParser(filepath=obj.na).get_path_and_filename()
-            obj.na = path + '/' + new_obj_name if path else  new_obj_name
+            obj.na = path + '/' + new_obj_name if path else new_obj_name
             obj.name = new_obj_name
-        else: # 移动对象或重命名
+        else:   # 移动对象或重命名
             _, did = bfm.get_cur_dir_id()
             obj.did = did
             obj.na = bfm.build_dir_full_name(new_obj_name)
@@ -500,14 +542,14 @@ class HarborManager:
 
         obj.reset_na_md5()
         if not obj.do_save():
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg= '移动对象操作失败')
+            raise exceptions.S3InternalError('移动对象操作失败')
 
         return obj, bucket
 
     def _validate_move_rename_params(self, move_to, rename):
         """
         校验移动或重命名参数
-        :param request:
+
         :return:
                 (move_to, rename)
                 move_to # None 或 string
@@ -522,14 +564,14 @@ class HarborManager:
         # 重命名对象参数
         if rename is not None:
             if '/' in rename:
-                raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='对象名称不能含“/”')
+                raise exceptions.S3InvalidRequest('对象名称不能含“/”')
 
             if len(rename) > 255:
-                raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='对象名称不能大于255个字符长度')
+                raise exceptions.S3InvalidRequest('对象名称不能大于255个字符长度')
 
         return move_to, rename
 
-    def write_chunk(self, bucket_name:str, obj_path:str, offset:int, chunk:bytes, reset:bool=False, user=None):
+    def write_chunk(self, bucket_name: str, obj_path: str, offset: int, chunk: bytes, reset: bool = False, user=None):
         """
         向对象写入一个数据块
 
@@ -544,12 +586,12 @@ class HarborManager:
                 raise HarborError   # 写入失败
         """
         if not isinstance(chunk, bytes):
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='数据不是bytes类型')
+            raise exceptions.S3InvalidRequest('数据不是bytes类型')
 
         return self.write_to_object(bucket_name=bucket_name, obj_path=obj_path, offset=offset, data=chunk,
                                     reset=reset, user=user)
 
-    def write_file(self, bucket_name:str, obj_path:str, offset:int, file, reset:bool=False, user=None):
+    def write_file(self, bucket_name: str, obj_path: str, offset: int, file, reset: bool = False, user=None):
         """
         向对象写入一个文件
 
@@ -593,7 +635,7 @@ class HarborManager:
                 self._save_one_chunk(obj=obj, rados=rados, offset=offset, chunk=data)
             else:
                 self._save_one_file(obj=obj, rados=rados, offset=offset, file=data)
-        except HarborError as e:
+        except exceptions.S3Error as e:
             # 如果对象是新创建的，上传失败删除对象元数据
             if created is True:
                 obj.do_delete()
@@ -618,23 +660,23 @@ class HarborManager:
         pp = PathParser(filepath=obj_path)
         path, filename = pp.get_path_and_filename()
         if not bucket_name or not filename:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         if len(filename) > 255:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='对象名称长度最大为255字符')
+            raise exceptions.S3InvalidRequest('对象名称长度最大为255字符')
 
         # 存储桶验证和获取桶对象
         bucket = self.get_bucket(bucket_name, user=user)
         if not bucket:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
 
         collection_name = bucket.get_bucket_table_name()
-        obj, created = self._get_obj_and_check_limit_or_create(collection_name, path, filename)
+        obj, created = self._get_or_create_path_obj(collection_name, path, filename)
         return bucket, obj, created
 
-    def _get_obj_and_check_limit_or_create(self, table_name, path, filename):
+    def _get_or_create_path_obj(self, table_name, path, filename):
         """
-        获取文件对象, 验证存储桶对象和目录数量上限，不存在并且验证通过则创建
+        获取文件对象, 不存在则创建路径和对象元数据
 
         :param table_name: 桶对应的数据库表名
         :param path: 文件对象所在的父路径
@@ -642,16 +684,22 @@ class HarborManager:
         :return:
                 (obj, False) # 对象已存在
                 (obj, True)  # 对象不存在，创建一个新对象
-                raise HarborError # 有错误，路径不存在，或已存在同名目录
 
-        :raise HarborError
+        :raise S3Error
         """
-        bfm = BucketFileManagement(path=path, collection_name=table_name)
+        did = None
 
+        # 有路径，创建整个路径
+        if path:
+            dirs = self.create_path(table_name=table_name, path=path)
+            base_dir = dirs[-1]
+            did = base_dir.id
+
+        bfm = BucketFileManagement(path=path, collection_name=table_name)
         try:
-            obj = bfm.get_dir_or_obj_exists(name=filename)
+            obj = bfm.get_dir_or_obj_exists(name=filename, cur_dir_id=did)
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=f'查询对象错误，{str(e)}')
+            raise exceptions.S3InternalError(f'查询对象错误，{str(e)}')
 
         # 文件对象已存在
         if obj and obj.is_file():
@@ -659,15 +707,10 @@ class HarborManager:
 
         # 已存在同名的目录
         if obj and obj.is_dir():
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='指定的对象名称与已有的目录重名，请重新指定一个名称')
+            raise exceptions.S3InvalidRequest('指定的对象名称与已有的目录重名，请重新指定一个名称')
 
-        ok, did = bfm.get_cur_dir_id()
-        if not ok:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='对象路经不存在')
-
-        # 验证集合文档上限
-        # if not self.do_bucket_limit_validate(bfm):
-        #     return None, None
+        if not did:
+            _, did = bfm.get_cur_dir_id()
 
         # 创建文件对象
         BucketFileClass = bfm.get_obj_model_class()
@@ -675,16 +718,13 @@ class HarborManager:
         bfinfo = BucketFileClass(na=full_filename,  # 全路径文件名
                                  name=filename,     # 文件名
                                  fod=True,          # 文件
+                                 did=did,           # 父节点id
                                  si=0, upt=timezone.now())  # 文件大小
-        # 有父节点
-        if did:
-            bfinfo.did = did
-
         try:
             bfinfo.save()
             obj = bfinfo
-        except:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='新建对象元数据失败，数据库错误')
+        except Exception as e:
+            raise exceptions.S3InternalError('新建对象元数据失败')
 
         return obj, True
 
@@ -706,7 +746,7 @@ class HarborManager:
         obj.ult = timezone.now()
         obj.si = 0
         if not obj.do_save(update_fields=['ult', 'si']):
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='修改对象元数据失败')
+            raise exceptions.S3InternalError('修改对象元数据失败')
 
         ok, _ = rados.delete()
         if not ok:
@@ -714,7 +754,7 @@ class HarborManager:
             obj.ult = old_ult
             obj.si = old_size
             obj.do_save(update_fields=['ult', 'si'])
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='rados文件对象删除失败')
+            raise exceptions.S3InternalError('rados文件对象删除失败')
 
         return True
 
@@ -734,7 +774,7 @@ class HarborManager:
         # 更新文件修改时间和对象大小
         new_size = offset + len(chunk)  # 分片数据写入后 对象偏移量大小
         if not self._update_obj_metadata(obj, size=new_size):
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='修改对象元数据失败')
+            raise exceptions.S3InternalError('修改对象元数据失败')
 
         # 存储文件块
         try:
@@ -746,7 +786,7 @@ class HarborManager:
         if not ok:
             # 手动回滚对象元数据
             self._update_obj_metadata(obj, obj.si, obj.upt)
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='文件块rados写入失败:' + msg)
+            raise exceptions.S3InternalError('文件块rados写入失败:' + msg)
 
         return True
 
@@ -767,11 +807,11 @@ class HarborManager:
         try:
             file_size = get_size(file)
         except AttributeError:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='输入必须是一个文件')
+            raise exceptions.S3InvalidRequest('输入必须是一个文件')
 
-        new_size = offset + file_size # 分片数据写入后 对象偏移量大小
+        new_size = offset + file_size   # 分片数据写入后 对象偏移量大小
         if not self._update_obj_metadata(obj, size=new_size):
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='修改对象元数据失败')
+            raise exceptions.S3InternalError('修改对象元数据失败')
 
         # 存储文件
         try:
@@ -783,7 +823,7 @@ class HarborManager:
         if not ok:
             # 手动回滚对象元数据
             self._update_obj_metadata(obj, obj.si, obj.upt)
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='文件块rados写入失败:' + msg)
+            raise exceptions.S3InternalError('文件块rados写入失败:' + msg)
 
         return True
 
@@ -831,22 +871,19 @@ class HarborManager:
         """
         path, filename = PathParser(filepath=obj_path).get_path_and_filename()
         if not bucket_name or not filename:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         # 存储桶验证和获取桶对象
-        try:
-            bucket, fileobj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
-        except HarborError as e:
-            raise e
+        bucket, fileobj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
 
         if fileobj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='文件对象不存在')
+            raise exceptions.S3NoSuchKey('文件对象不存在')
 
         obj_key = fileobj.get_obj_key(bucket.id)
         old_id = fileobj.id
         # 先删除元数据，后删除rados对象（删除失败恢复元数据）
         if not fileobj.do_delete():
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='删除对象原数据时错误')
+            raise exceptions.S3InternalError('删除对象原数据时错误')
 
         pool_name = bucket.get_pool_name()
         ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=fileobj.si)
@@ -855,7 +892,7 @@ class HarborManager:
             # 恢复元数据
             fileobj.id = old_id
             fileobj.do_save(force_insert=True)  # 仅尝试创建文档，不修改已存在文档
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='删除对象rados数据时错误')
+            raise exceptions.S3InternalError('删除对象rados数据时错误')
 
         return True
 
@@ -875,16 +912,13 @@ class HarborManager:
         :raise HarborError
         """
         if offset < 0 or size < 0 or size > 20 * 1024 ** 2:  # 20Mb
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         # 存储桶验证和获取桶对象
-        try:
-            bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
-        except HarborError as e:
-            raise e
+        bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
 
         if obj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='文件对象不存在')
+            raise exceptions.S3NoSuchKey('文件对象不存在')
 
         # 自定义读取文件对象
         if size == 0:
@@ -895,7 +929,7 @@ class HarborManager:
         rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         ok, chunk = rados.read(offset=offset, size=size)
         if not ok:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg='文件块读取失败')
+            raise exceptions.S3InternalError('文件块读取失败')
 
         # 如果从0读文件就增加一次下载次数
         if offset == 0:
@@ -923,16 +957,13 @@ class HarborManager:
             per_size = 10 * 1024 ** 2   # 10Mb
 
         if offset < 0 or (end is not None and end < 0):
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         # 存储桶验证和获取桶对象
-        try:
-            bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user, all_public=all_public)
-        except HarborError as e:
-            raise e
+        bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user, all_public=all_public)
 
         if obj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='文件对象不存在')
+            raise exceptions.S3NoSuchKey('文件对象不存在')
 
         # 增加一次下载次数
         obj.download_cound_increase()
@@ -980,18 +1011,18 @@ class HarborManager:
         pp = PathParser(filepath=obj_path)
         path, filename = pp.get_path_and_filename()
         if not bucket_name or not filename:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         if len(filename) > 255:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='对象名称长度最大为255字符')
+            raise exceptions.S3InvalidRequest('对象名称长度最大为255字符')
 
         # 存储桶验证和获取桶对象
         bucket = self.get_bucket(bucket_name, user=user)
         if not bucket:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
 
         collection_name = bucket.get_bucket_table_name()
-        obj, created = self._get_obj_and_check_limit_or_create(collection_name, path, filename)
+        obj, created = self._get_or_create_path_obj(collection_name, path, filename)
         obj_key = obj.get_obj_key(bucket.id)
         pool_name = bucket.get_pool_name()
 
@@ -1005,7 +1036,7 @@ class HarborManager:
                 offset, data = yield ok
                 try:
                     ok = self._save_one_chunk(obj=obj, rados=rados, offset=offset, chunk=data)
-                except HarborError:
+                except exceptions.S3Error:
                     ok = False
 
         return generator()
@@ -1032,7 +1063,7 @@ class HarborManager:
             if bucket.check_user_own_bucket(user):
                 return bucket
             else:
-                raise HarborError(code=status.HTTP_403_FORBIDDEN, msg='无权限访问存储桶')
+                raise exceptions.S3AccessDenied('无权限访问存储桶')
         return bucket
 
     def get_bucket_and_obj_or_dir(self, bucket_name: str, path: str, user=None, all_public=False):
@@ -1052,21 +1083,21 @@ class HarborManager:
         pp = PathParser(filepath=path)
         dir_path, filename = pp.get_path_and_filename()
         if not bucket_name or not filename:
-            raise HarborError(code=status.HTTP_400_BAD_REQUEST, msg='参数有误')
+            raise exceptions.S3InvalidRequest('参数有误')
 
         # 存储桶验证和获取桶对象
         bucket = self.get_bucket_by_name(bucket_name)
         if not bucket:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='存储桶不存在')
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
         self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=all_public)
 
         table_name = bucket.get_bucket_table_name()
         try:
             obj = self._get_obj_or_dir(table_name=table_name, path=dir_path, name=filename)
-        except HarborError as e:
+        except exceptions.S3Error as e:
             raise e
         except Exception as e:
-            raise HarborError(code=status.HTTP_500_INTERNAL_SERVER_ERROR, msg=f'查询目录或对象错误，{str(e)}')
+            raise exceptions.S3InternalError(f'查询目录或对象错误，{str(e)}')
 
         if not obj:
             return bucket, None
@@ -1111,7 +1142,7 @@ class HarborManager:
         """
         bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
         if obj is None:
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='对象不存在')
+            raise exceptions.S3NoSuchKey('对象不存在')
 
         if obj.set_shared(share=share, days=days, password=password):
             return True
@@ -1136,7 +1167,7 @@ class HarborManager:
         """
         bucket, obj = self.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path, user=user)
         if not obj or obj.is_file():
-            raise HarborError(code=status.HTTP_404_NOT_FOUND, msg='目录不存在')
+            raise exceptions.S3NoSuchKey('目录不存在')
 
         if obj.set_shared(share=share, days=days, password=password):
             return True

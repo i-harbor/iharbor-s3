@@ -1,4 +1,5 @@
 import hashlib
+import base64
 
 from django.conf import settings
 from django.core.files.uploadhandler import FileUploadHandler
@@ -7,6 +8,12 @@ from django.core.exceptions import RequestDataTooBig
 from django.utils.translation import gettext
 
 from utils.oss.pyrados import HarborObject, FileWrapper
+
+
+class ParseDecodeBase64Error(Exception):
+    default_status_code = 400
+    default_code = "DecodeBase64Error"
+    default_message = "Could not decode base64 data."
 
 
 class PathParser:
@@ -95,10 +102,11 @@ class CephUploadFile(UploadedFile):
     """
     DEFAULT_CHUNK_SIZE = 5 * 2**20     # default 5MB
 
-    def __init__(self, file, field_name, name, content_type, size, charset, file_md5='', content_type_extra=None):
+    def __init__(self, file, field_name, name, content_type, size, charset, file_md5='', md5_handler=None, content_type_extra=None):
         super().__init__(file, name, content_type, size, charset, content_type_extra)
         self.field_name = field_name
         self.file_md5 = file_md5
+        self.md5_handler = md5_handler
 
     def open(self, mode=None):
         self.file.seek(0)
@@ -154,6 +162,7 @@ class FileUploadToCephHandler(FileUploadHandler):
             size=file_size,
             charset=self.charset,
             file_md5=self.file_md5(),
+            md5_handler=self.file_md5_handler,
             content_type_extra=self.content_type_extra
         )
 
@@ -163,3 +172,4 @@ class FileUploadToCephHandler(FileUploadHandler):
             return fmh.hexdigest()
 
         return ''
+

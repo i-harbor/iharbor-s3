@@ -86,7 +86,6 @@ class CustomGenericViewSet(GenericViewSet):
         :return: str
             bucket name     # BucketName.SERVER_HTTP_HOST_NAME
             ''              # SERVER_HTTP_HOST_NAME or other
-
         """
         main_host = getattr(settings, 'SERVER_HTTP_HOST_NAME', 'obs.cstcloud.cn')
         host = request.get_host()
