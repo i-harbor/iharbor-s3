@@ -105,12 +105,6 @@ class CustomGenericViewSet(GenericViewSet):
         key: str = request.path
         return key.strip('/')
 
-    def get_renderers(self):
-        """
-        renderer_classes列表项 可以是类或对象
-        """
-        return [renderer() if renderer is not object else renderer for renderer in self.renderer_classes]
-
     def set_renderer(self, request, renderer):
         """
         设置渲染器
@@ -148,3 +142,14 @@ class CustomGenericViewSet(GenericViewSet):
         response.exception = True
         self.set_renderer(self.request, CusXMLRenderer(root_tag_name='Error'))
         return response
+
+    def exception_response(self, request, exc):
+        """
+        异常回复
+
+        :param request:
+        :param exc: S3Error()
+        :return: Response()
+        """
+        self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
+        return Response(data=exc.err_data(), status=exc.status_code)
