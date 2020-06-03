@@ -1,5 +1,4 @@
 import hashlib
-import base64
 
 from django.conf import settings
 from django.core.files.uploadhandler import FileUploadHandler
@@ -7,7 +6,11 @@ from django.core.files.uploadedfile import UploadedFile
 from django.core.exceptions import RequestDataTooBig
 from django.utils.translation import gettext
 
-from utils.oss.pyrados import HarborObject, FileWrapper
+from utils.oss.pyrados import HarborObject, FileWrapper, RadosError
+
+
+EMPTY_HEX_MD5 = 'd41d8cd98f00b204e9800998ecf8427e'
+EMPTY_BYTES_MD5 = hashlib.md5().digest()
 
 
 class ParseDecodeBase64Error(Exception):
@@ -135,6 +138,8 @@ class FileUploadToCephHandler(FileUploadHandler):
             return
         if content_length > max_size:
             raise RequestDataTooBig(gettext('上传文件超过大小限制'))
+        if content_length <= 0:
+            raise
 
     def new_file(self, *args, **kwargs):
         """
@@ -142,11 +147,12 @@ class FileUploadToCephHandler(FileUploadHandler):
         """
         super().new_file(*args, **kwargs)
         self.file = FileWrapper(HarborObject(pool_name=self.pool_name, obj_id=self.obj_key))
-        if self.request:
-            if self.request.headers.get('Content-MD5', ''):
-                self.file_md5_handler = hashlib.md5()
+        self.file_md5_handler = hashlib.md5()
 
     def receive_data_chunk(self, raw_data, start):
+        """
+        :raises: RadosError
+        """
         self.file.write(raw_data, offset=start)
         if self.file_md5_handler:
             self.file_md5_handler.update(raw_data)

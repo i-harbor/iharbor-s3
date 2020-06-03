@@ -3,15 +3,18 @@ class S3Error(Exception):
     default_code = 'InternalError'
     default_status_code = 500
 
-    def __init__(self, message: str = '', code: str = '', status_code=None):
+    def __init__(self, message: str = '', code: str = '', status_code=None, extend_msg=''):
         """
         :param message: 错误描述
         :param code: 错误代码
         :param status_code: HTTP状态码
+        :param extend_msg: 扩展错误描述的信息，追加到message后面
         """
         self.message = message if message else self.default_message
         self.code = code if code else self.default_code
         self.status_code = self.default_status_code if status_code is None else status_code
+        if extend_msg:
+            self.message += '&&' + extend_msg
 
     def __repr__(self):
         return f'{type(self)}(message={self.message}, code={self.code}, status_code={self.status_code})'
@@ -213,3 +216,9 @@ class S3RequestIsNotMultiPartContent(S3Error):
     default_message = "Bucket POST must be of the enclosure-type multipart/form-data."
     default_code = 'RequestIsNotMultiPartContent'
     default_status_code = 411
+
+
+class S3UnsupportedMediaType(S3Error):
+    default_message = "Unsupported Media Type."
+    default_code = 'UnsupportedMediaType'
+    default_status_code = 415

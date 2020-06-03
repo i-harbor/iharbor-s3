@@ -1,0 +1,11 @@
+*.py[cod]
+.idea
+/.vscode/
+*.sqlite3
+*__pycache__/
+/media/
+/s3server/security.py
+*.so
+*.log
+/collect_static/
+

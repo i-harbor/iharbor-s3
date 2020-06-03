@@ -15,8 +15,8 @@ from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_f
                     delete_table_for_model_class)
 from . import exceptions
 from .harbor import HarborManager
-from utils.storagers import FileUploadToCephHandler
-from utils.oss.pyrados import HarborObject
+from utils.storagers import FileUploadToCephHandler, EMPTY_BYTES_MD5, EMPTY_HEX_MD5
+from utils.oss.pyrados import HarborObject, RadosError
 from buckets.models import BucketFileBase
 
 
@@ -202,29 +202,50 @@ class ObjViewSet(CustomGenericViewSet):
             # 删除数据和元数据
             f = getattr(uploader, 'file', None)
             s = f.size if f else 0
-            rados.delete(obj_size=s)
+            try:
+                rados.delete(obj_size=s)
+            except Exception:
+                pass
             if created:
-                obj.delete()
+                obj.do_delete()
 
         try:
             self.kwargs['filename'] = 'filename'
             put_data = request.data
         except UnsupportedMediaType:
             clean_put(uploader, obj, created)
-            return self.exception_response(request, exceptions.S3RequestIsNotMultiPartContent())
+            return self.exception_response(request, exceptions.S3UnsupportedMediaType())
+        except RadosError as e:
+            clean_put(uploader, obj, created)
+            return self.exception_response(request, exceptions.S3InternalError(extend_msg=str(e)))
         except Exception as exc:
             clean_put(uploader, obj, created)
-            return self.exception_response(request, exceptions.S3InvalidRequest(str(exc)))
+            return self.exception_response(request, exceptions.S3InvalidRequest(extend_msg=str(exc)))
 
         file = put_data.get('file')
         if not file:
-            clean_put(uploader, obj, created)
-            return self.exception_response(request, exceptions.S3InvalidRequest('Request body is empty.'))
+            content_length = self.request.headers.get('Content-Length', None)
+            try:
+                content_length = int(content_length)
+            except Exception:
+                clean_put(uploader, obj, created)
+                return self.exception_response(request, exceptions.S3MissingContentLength())
+
+            # 是否是空对象
+            if content_length != 0:
+                clean_put(uploader, obj, created)
+                return self.exception_response(request, exceptions.S3InvalidRequest('Request body is empty.'))
+
+            bytes_md5 = EMPTY_BYTES_MD5
+            obj_md5 = EMPTY_HEX_MD5
+            obj_size = 0
+        else:
+            bytes_md5 = file.md5_handler.digest()
+            obj_md5 = file.file_md5
+            obj_size = file.size
 
         content_b64_md5 = self.request.headers.get('Content-MD5', '')
-        obj_md5 = file.file_md5
         if content_b64_md5:
-            bytes_md5 = file.md5_handler.digest()
             base64_md5 = base64.b64encode(bytes_md5).decode('ascii')
             if content_b64_md5 != base64_md5:
                 # 删除数据和元数据
@@ -232,7 +253,7 @@ class ObjViewSet(CustomGenericViewSet):
                 return self.exception_response(request, exceptions.S3InvalidDigest())
 
         try:
-            obj.si = file.size
+            obj.si = obj_size
             obj.md5 = obj_md5
             obj.save(update_fields=['si', 'md5'])
         except Exception as e:
