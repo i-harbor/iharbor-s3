@@ -217,7 +217,7 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只创建属于此用户的目录（只查找此用户的存储桶）
         :return:
             True, dir: success
-            raise HarborError: failed
+            raise S3Error: failed
 
         :raise S3Error
         """
@@ -234,9 +234,9 @@ class HarborManager:
 
         :return:
                 success: {data}
-                failure: raise HarborError
+                failure: raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         data = {}
         dir_path, dir_name = PathParser(filepath=dirpath).get_path_and_filename()
@@ -338,9 +338,9 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只删除属于此用户的目录（只查找此用户的存储桶）
         :return:
             True: success
-            raise HarborError(): failed
+            raise S3Error(): failed
 
-        :raise HarborError()
+        :raise S3Error()
         """
         path, dir_name = PathParser(filepath=dirpath).get_path_and_filename()
 
@@ -375,9 +375,9 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只获取属于此用户的目录下的文件列表信息（只查找此用户的存储桶）
         :return:
                 success:    (QuerySet(), bucket) # django QuerySet实例和bucket实例
-                failed:      raise HarborError
+                failed:      raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         bucket = self.get_bucket(bucket_name, user)
         if not bucket:
@@ -401,12 +401,12 @@ class HarborManager:
         :param paginator: 分页器，默认为None
         :return:
                 generator           # success
-                :raise HarborError  # failed
+                :raise S3Error  # failed
         :usage:
             for objs in generator:
                 print(objs)         # objs type list, raise HarborError when error
 
-        :raise HarborError
+        :raise S3Error
         """
         qs, _ = self._list_dir_queryset(bucket_name=bucket_name, path=path, user=user)
 
@@ -442,9 +442,9 @@ class HarborManager:
         :param paginator: 分页器，默认为None
         :return:
                 success:    (list[object, object,], bucket) # list和bucket实例
-                failed:      raise HarborError
+                failed:      raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         files, bucket = self._list_dir_queryset(bucket_name=bucket_name, path=path, user=user)
 
@@ -479,9 +479,9 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
         :return:
             success: (object, bucket)     # 移动后的对象实例
-            failed : raise HarborError
+            failed : raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         path, filename = PathParser(filepath=obj_path).get_path_and_filename()
         if not bucket_name or not filename:
@@ -508,9 +508,9 @@ class HarborManager:
         :param rename: 重命名的新名称
         :return:
             success: (object, bucket)
-            failed : raise HarborError
+            failed : raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         table_name = bucket.get_bucket_table_name()
         new_obj_name = rename if rename else obj.name # 移动后对象的名称，对象名称不变或重命名
@@ -555,7 +555,7 @@ class HarborManager:
                 move_to # None 或 string
                 rename  # None 或 string
 
-        :raise HarborError
+        :raise S3Error
         """
         # 移动对象参数
         if move_to is not None:
@@ -583,7 +583,7 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
         :return:
                 created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise HarborError   # 写入失败
+                raise S3Error   # 写入失败
         """
         if not isinstance(chunk, bytes):
             raise exceptions.S3InvalidRequest('数据不是bytes类型')
@@ -603,7 +603,7 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
         :return:
                 created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise HarborError   # 写入失败
+                raise S3Error   # 写入失败
         """
         return self.write_to_object(bucket_name=bucket_name, obj_path=obj_path, offset=offset, data=file,
                                     reset=reset, user=user)
@@ -620,7 +620,7 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
         :return:
                 created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise HarborError   # 写入失败
+                raise S3Error   # 写入失败
         """
         bucket, obj, created = self.create_empty_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
         obj_key = obj.get_obj_key(bucket.id)
@@ -653,9 +653,9 @@ class HarborManager:
         :return:
                 (bucket, obj, False) # 对象已存在
                 (bucket, obj, True)  # 对象不存在，创建一个新对象
-                raise HarborError # 有错误，路径不存在，或已存在同名目录
+                raise S3Error        # 有错误，路径不存在，或已存在同名目录
 
-        :raise HarborError
+        :raise S3Error
         """
         pp = PathParser(filepath=obj_path)
         path, filename = pp.get_path_and_filename()
@@ -736,7 +736,7 @@ class HarborManager:
         :param rados: rados接口类对象
         :return:
                 正常：True
-                错误：raise HarborError
+                错误：raise S3Error
         """
         # 先更新元数据，后删除rados数据（如果删除失败，恢复元数据）
         # 更新文件上传时间
@@ -768,7 +768,7 @@ class HarborManager:
         :param chunk: 分片数据
         :return:
             成功：True
-            失败：raise HarborError
+            失败：raise S3Error
         """
         # 先更新元数据，后写rados数据
         # 更新文件修改时间和对象大小
@@ -800,7 +800,7 @@ class HarborManager:
         :param file: 文件
         :return:
             成功：True
-            失败：raise HarborError
+            失败：raise S3Error
         """
         # 先更新元数据，后写rados数据
         # 更新文件修改时间和对象大小
@@ -865,9 +865,9 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只删除属于此用户的对象（只查找此用户的存储桶）
         :return:
             success: True
-            failed:  raise HarborError
+            failed:  raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         path, filename = PathParser(filepath=obj_path).get_path_and_filename()
         if not bucket_name or not filename:
@@ -907,9 +907,9 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只删除属于此用户的对象（只查找此用户的存储桶）
         :return:
             success: （chunk:bytes, obj）  #  数据块，对象元数据实例
-            failed:   raise HarborError         # 读取失败，抛出HarborError
+            failed:   raise S3Error         # 读取失败
 
-        :raise HarborError
+        :raise S3Error
         """
         if offset < 0 or size < 0 or size > 20 * 1024 ** 2:  # 20Mb
             raise exceptions.S3InvalidRequest('参数有误')
@@ -951,7 +951,7 @@ class HarborManager:
         :return: (generator, object)
                 for data in generator:
                     do something
-        :raise HarborError
+        :raise S3Error
         """
         if per_size < 0 or per_size > 20 * 1024 ** 2:  # 20Mb
             per_size = 10 * 1024 ** 2   # 10Mb
@@ -982,7 +982,7 @@ class HarborManager:
         :return: generator
                 for data in generator:
                     do something
-        :raise HarborError
+        :raise S3Error
         """
         # 读取文件对象生成器
         obj_key = obj.get_obj_key(bucket.id)
@@ -999,13 +999,13 @@ class HarborManager:
         :param user: 用户，默认为None，如果给定用户只删除属于此用户的对象（只查找此用户的存储桶）
         :return:
                 generator           # success
-                :raise HarborError  # failed
+                :raise S3Error  # failed
 
         :usage:
             ok = next(generator)
             ok = generator.send((offset, bytes))  # ok = True写入成功， ok=False写入失败
 
-        :raise HarborError
+        :raise S3Error
         """
         # 对象路径分析
         pp = PathParser(filepath=obj_path)
@@ -1051,9 +1051,9 @@ class HarborManager:
         :param all_public: 默认False(忽略); True(查找所有公有权限存储桶);
         :return:
                 success: bucket
-                failed:   raise HarborError
+                failed:   raise S3Error
 
-        :raise HarborError
+        :raise S3Error
         """
         if all_public:
             if bucket.is_public_permission():   # 公有桶
@@ -1076,9 +1076,9 @@ class HarborManager:
         :param all_public: 默认False(忽略); True(查找所有公有权限存储桶);
         :return:
                 success: （bucket, object） # obj == None表示对象或目录不存在
-                failed:   raise HarborError # 存储桶不存在，或参数有误，或有错误发生
+                failed:   raise S3Error # 存储桶不存在，或参数有误，或有错误发生
 
-        :raise HarborError
+        :raise S3Error
         """
         pp = PathParser(filepath=path)
         dir_path, filename = pp.get_path_and_filename()
@@ -1114,9 +1114,9 @@ class HarborManager:
         :param all_public: 默认False(忽略); True(查找所有公有权限存储桶);
         :return:
                 success: （bucket, obj）  # obj == None表示对象不存在
-                failed:   raise HarborError # 存储桶不存在，或参数有误，或有错误发生
+                failed:   raise S3Error # 存储桶不存在，或参数有误，或有错误发生
 
-        :raise HarborError
+        :raise S3Error
         """
         bucket, obj = self.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=obj_path, user=user, all_public=all_public)
         if obj and obj.is_file():
@@ -1138,7 +1138,7 @@ class HarborManager:
             success: True
             failed: False
 
-        :raise HarborError
+        :raise S3Error
         """
         bucket, obj = self.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
         if obj is None:
@@ -1163,7 +1163,7 @@ class HarborManager:
             success: True
             failed: False
 
-        :raise HarborError
+        :raise S3Error
         """
         bucket, obj = self.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path, user=user)
         if not obj or obj.is_file():

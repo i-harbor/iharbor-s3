@@ -157,6 +157,12 @@ class ObjViewSet(CustomGenericViewSet):
         """
         return self.put_object(request, args, kwargs)
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        delete object
+        """
+        return self.delete_object(request=request, args=args, kwargs=kwargs)
+
     def put_object(self, request, args, kwargs):
         bucket_name = self.get_bucket_name(request)
         obj_path_name = self.get_obj_path_name(request)
@@ -266,6 +272,17 @@ class ObjViewSet(CustomGenericViewSet):
         if x_amz_acl:
             headers['X-Amz-Acl'] = x_amz_acl
         return Response(status=status.HTTP_200_OK, headers=headers)
+
+    def delete_object(self, request, args, kwargs):
+        bucket_name = self.get_bucket_name(request)
+        obj_path_name = self.get_obj_path_name(request)
+        h_manager = HarborManager()
+        try:
+            h_manager.delete_object(bucket_name=bucket_name, obj_path=obj_path_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        return Response(status=status.HTTP_204_NO_CONTENT, headers={'x-amz-delete-marker': 'true'})
 
     def get_parsers(self):
         """

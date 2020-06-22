@@ -3,7 +3,7 @@
 请自行安装python3.6和Git。
 使用Git拉取代码： 
 ```
-git clone https://github.com/i-harbor/s3server.git
+git clone https://github.com/i-harbor/iharbor-s3.git
 ```
 ### 1.2 安装python虚拟环境和包管理工具pipenv
 使用pip命令安装pipenv。  
