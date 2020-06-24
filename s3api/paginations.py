@@ -1,31 +1,114 @@
+from urllib import parse
 from collections import OrderedDict
 
+from django.utils.encoding import force_str
 from rest_framework.pagination import CursorPagination, LimitOffsetPagination, _divide_with_ceil
 from rest_framework.response import Response
 
 
-class BucketFileCursorPagination(CursorPagination):
+def get_query_param(url, key):
+    """
+    get query param form url
+
+    :param url: url
+    :param key: name of query param
+    :return:
+        list(str) or None
+    """
+    (scheme, netloc, path, query, fragment) = parse.urlsplit(force_str(url))
+    query_dict = parse.parse_qs(query, keep_blank_values=True)
+    return query_dict.get(key, None)
+
+
+class ListObjectsV2CursorPagination(CursorPagination):
     """
     存储通文件对象分页器
     """
-    cursor_query_param = 'cursor'
-    page_size = 200
-    ordering = ('id', )
+    cursor_query_param = 'continuation-token'
+    cursor_query_description = 'The pagination continuation-token value.'
+    page_size = 1000
+    invalid_cursor_message = 'Invalid continuation-token'
+    ordering = '-id'
 
-    # Client can control the page size using this query parameter.
-    # Default is 'None'. Set to eg 'page_size' to enable usage.
-    page_size_query_param = 'size'
+    page_size_query_param = 'max-keys'
+    page_size_query_description = 'Max number of results to return per page.'
 
-    # Set to an integer to limit the maximum page size the client may request.
-    # Only relevant if 'page_size_query_param' has also been set.
-    max_page_size = 1000
-    offset_cutoff = None
+    max_page_size = 5000
 
-    def get_paginated_response(self, data):
-        if isinstance(data, OrderedDict):
-            data['next'] = self.get_next_link()
-            data['previous'] = self.get_previous_link()
-            return Response(data)
+    def paginate_queryset(self, queryset, request, view=None):
+        self.request = request
+        data = super().paginate_queryset(queryset=queryset, request=request, view=view)
+        if data is None:
+            data = []
+        self._data = data
+        self.key_count = len(self._data)
+        return self._data
+
+    @property
+    def page_data(self):
+        if hasattr(self, '_data'):
+            return self._data
+
+        raise AssertionError('You must call `.paginate_queryset()` before accessing `.data`.')
+
+    def get_objects_and_dirs(self):
+        if not hasattr(self, 'objects') or not hasattr(self, 'dirs'):
+            objects = []
+            dirs = []
+            data = self.page_data
+            for obj in data:
+                if obj.is_file():
+                    objects.append(obj)
+                else:
+                    dirs.append(obj)
+            self.objects = objects
+            self.dirs = dirs
+
+        return self.objects, self.dirs
+
+    def get_common_prefix(self, delimiter='/'):
+        common_prefix = []
+        for d in self.dirs:
+            na = d.na
+            if not na.endswith(delimiter):
+                na = na + delimiter
+            common_prefix.append({"Prefix": na})
+
+        return common_prefix
+
+    def get_paginated_data(self, common_prefixes=False, delimiter='/'):
+        is_truncated = 'true' if self.has_next else 'false'
+        data = {
+            'IsTruncated': is_truncated,        # can not use True
+            'MaxKeys': self.page_size,
+            'KeyCount': self.key_count
+        }
+        c_token = self.get_continuation_token(request=self.request)
+        if c_token:
+            data['ContinuationToken'] = c_token
+
+        nc_token = self.get_next_continuation_token()
+        if nc_token:
+            data['NextContinuationToken'] = nc_token
+
+        if common_prefixes:
+            data['CommonPrefixes'] = self.get_common_prefix(delimiter)
+
+        return data
+
+    def get_continuation_token(self, request):
+        return request.query_params.get(self.cursor_query_param, None)
+
+    def get_next_continuation_token(self):
+        next_link = self.get_next_link()
+        if next_link is None:
+            return None
+
+        params = get_query_param(url=next_link, key=self.cursor_query_param)
+        if not params:
+            return None
+
+        return params[0]
 
 
 class BucketFileLimitOffsetPagination(LimitOffsetPagination):

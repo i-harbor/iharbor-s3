@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from utils.storagers import EMPTY_HEX_MD5
 
 
 class BucketListSerializer(serializers.Serializer):
@@ -15,4 +16,41 @@ class BucketListSerializer(serializers.Serializer):
     @staticmethod
     def get_name(obj):
         return obj.name
+
+
+class ObjectListSerializer(serializers.Serializer):
+    """
+    对象序列化器
+    """
+    Key = serializers.SerializerMethodField(method_name='get_key')
+    LastModified = serializers.SerializerMethodField(method_name='get_last_modified')
+    ETag = serializers.SerializerMethodField(method_name='get_etag')
+    Size = serializers.SerializerMethodField(method_name='get_size')
+    StorageClass = serializers.SerializerMethodField(method_name='get_storage_class')
+
+    @staticmethod
+    def get_key(obj):
+        if obj.is_dir():
+            return obj.na + '/'
+        return obj.na
+
+    @staticmethod
+    def get_last_modified(obj):
+        t = obj.upt if obj.upt else obj.ult
+        return serializers.DateTimeField().to_representation(t)
+
+    @staticmethod
+    def get_etag(obj):
+        if obj.is_dir():
+            return EMPTY_HEX_MD5
+        return obj.md5
+
+    @staticmethod
+    def get_size(obj):
+        return obj.si
+
+    @staticmethod
+    def get_storage_class(obj):
+        return 'STANDARD'
+
 

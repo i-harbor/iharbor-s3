@@ -8,7 +8,7 @@ from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
-from .renders import CusXMLRenderer
+from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
 from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_for_model_class,
@@ -18,21 +18,23 @@ from .harbor import HarborManager
 from utils.storagers import FileUploadToCephHandler, EMPTY_BYTES_MD5, EMPTY_HEX_MD5
 from utils.oss.pyrados import HarborObject, RadosError
 from buckets.models import BucketFileBase
+from . import serializers
+from . import paginations
 
 
 class BucketViewSet(CustomGenericViewSet):
-    renderer_classes = [CusXMLRenderer]
+    renderer_classes = [renders.CusXMLRenderer]
 
     def list(self, request, *args, **kwargs):
         """
         list objects (v1 && v2)
         get object metadata
         """
-        prefix = request.query_params.get('Prefix', None)
-        if not prefix:
-            return self.exception_response(request, exceptions.S3InvalidArgument(message=_('无效的参数Prefix')))
+        list_type = request.query_params.get('list-type', '1')
+        if list_type == '2':
+            return self.list_objects_v2(request=request, args=args, kwargs=kwargs)
 
-        return Response(data={'msg': 'list objects'}, status=status.HTTP_400_BAD_REQUEST)
+        return self.list_objects_v1(request=request, args=args, kwargs=kwargs)
 
     def update(self, request, *args, **kwargs):
         """
@@ -142,9 +144,115 @@ class BucketViewSet(CustomGenericViewSet):
 
         return Response(status=status.HTTP_200_OK)
 
+    def list_objects_v2(self, request, *args, **kwargs):
+        delimiter = request.query_params.get('delimiter', None)
+        prefix = request.query_params.get('prefix', '')
+        bucket_name = self.get_bucket_name(request)
+
+        if not delimiter and not prefix:    # list所有对象和目录
+            return self.list_objects_v2_list_all(request=request, prefix=prefix)
+
+        path = prefix.strip('/')
+        if prefix and not path:     # prefix invalid, return no match data
+            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+
+        if delimiter is None or delimiter != '/':
+            e = exceptions.S3InvalidRequest(message=_('Unsupported, if param "prefix" is not empty, param "delimiter" must be "/"'))
+            return self.exception_response(request, e)
+
+        delimiter = '/'
+        hm = HarborManager()
+        try:
+            bucket, obj = hm.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if obj is None:
+            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+
+        paginator = paginations.ListObjectsV2CursorPagination()
+        max_keys = paginator.get_page_size(request=request)
+        ret_data = {
+            'IsTruncated': 'false',     # can not use True
+            'Name': bucket_name,
+            'Prefix': prefix,
+            'EncodingType': 'url',
+            'MaxKeys': max_keys
+        }
+
+        if prefix == '' or prefix.endswith('/'):  # list dir
+            if not obj.is_dir():
+                return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+
+            objs_qs = hm.list_dir_queryset(bucket=bucket, dir_obj=obj)
+            paginator.paginate_queryset(objs_qs, request=request)
+            objs, _ = paginator.get_objects_and_dirs()
+            serializer = serializers.ObjectListSerializer(objs, many=True)
+
+            data = paginator.get_paginated_data(common_prefixes=True, delimiter=delimiter)
+            ret_data.update(data)
+            ret_data['Contents'] = serializer.data
+            self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+            return Response(data=ret_data, status=status.HTTP_200_OK)
+
+        # list object metadata
+        if not obj.is_file():
+            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+
+        serializer = serializers.ObjectListSerializer(obj)
+        ret_data['Contents'] = [serializer.data]
+        ret_data['KeyCount'] = 1
+        self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        return Response(data=ret_data, status=status.HTTP_200_OK)
+
+    def list_objects_v2_list_all(self, request, prefix):
+        """
+        列举所有对象和目录
+        """
+        bucket_name = self.get_bucket_name(request)
+        hm = HarborManager()
+        try:
+            bucket, objs_qs = hm.get_bucket_objects_dirs_queryset(bucket_name=bucket_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        paginator = paginations.ListObjectsV2CursorPagination()
+        objs_dirs = paginator.paginate_queryset(objs_qs, request=request)
+        serializer = serializers.ObjectListSerializer(objs_dirs, many=True)
+
+        data = paginator.get_paginated_data()
+        data['Contents'] = serializer.data
+        data['Name'] = bucket_name
+        data['Prefix'] = prefix
+        data['EncodingType'] = 'url'
+
+        self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        return Response(data=data, status=status.HTTP_200_OK)
+
+    def list_objects_v2_no_match(self, request, prefix, delimiter):
+        bucket_name = self.get_bucket_name(request)
+        paginator = paginations.ListObjectsV2CursorPagination()
+        max_keys = paginator.get_page_size(request=request)
+        ret_data = {
+            'IsTruncated': 'false',     # can not use True
+            'Name': bucket_name,
+            'Prefix': prefix,
+            'EncodingType': 'url',
+            'MaxKeys': max_keys,
+            'KeyCount': 0
+        }
+        if delimiter:
+            ret_data['Delimiter'] = delimiter
+
+        self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        return Response(data=ret_data, status=status.HTTP_200_OK)
+
+    def list_objects_v1(self, request, *args, **kwargs):
+        return self.exception_response(request, exceptions.S3InvalidArgument(_("Version v1 of ListObjects is not supported now.")))
+
 
 class ObjViewSet(CustomGenericViewSet):
-    renderer_classes = [CusXMLRenderer]
+    renderer_classes = [renders.CusXMLRenderer]
 
     def list(self, request, *args, **kwargs):
         bucket_name = self.get_bucket_name(request)

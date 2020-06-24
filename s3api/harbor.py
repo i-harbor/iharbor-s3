@@ -1082,14 +1082,18 @@ class HarborManager:
         """
         pp = PathParser(filepath=path)
         dir_path, filename = pp.get_path_and_filename()
-        if not bucket_name or not filename:
-            raise exceptions.S3InvalidRequest('参数有误')
+        if not bucket_name:
+            raise exceptions.S3InvalidRequest('bucket_name参数有误')
 
         # 存储桶验证和获取桶对象
         bucket = self.get_bucket_by_name(bucket_name)
         if not bucket:
             raise exceptions.S3NoSuchBucket('存储桶不存在')
         self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=all_public)
+
+        if not dir_path and not filename:
+            root_dir = BucketFileManagement().root_dir()
+            return bucket, root_dir
 
         table_name = bucket.get_bucket_table_name()
         try:
@@ -1173,4 +1177,63 @@ class HarborManager:
             return True
 
         return False
+
+    def get_bucket_objects_dirs_queryset(self, bucket_name: str, user):
+        """
+        获得所有对象和目录记录
+
+        :return:
+            bucket, QuerySet()
+
+        :raises: S3Error
+        """
+        # 存储桶验证和获取桶对象
+        bucket = self.get_bucket_by_name(bucket_name)
+        if not bucket:
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
+        self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=False)
+
+        table_name = bucket.get_bucket_table_name()
+        objs = self.get_objects_dirs_queryset(table_name=table_name)
+        return bucket, objs
+
+    def get_objects_dirs_queryset(self, table_name: str):
+        """
+        获得所有文件对象和目录记录
+
+        :return: QuerySet()
+        """
+        return BucketFileManagement(collection_name=table_name).get_objects_dirs_queryset()
+
+    def get_dir_queryset(self, table_name: str, path: str):
+        """
+        获取路径下的所有目录记录
+
+        :param table_name:
+        :param path:
+        :return:
+            QuerySet()
+        :raises: S3Error
+        """
+        bfm = BucketFileManagement(path=path, collection_name=table_name)
+        ok, qs = bfm.get_cur_dir_files()
+        if not ok:
+            raise exceptions.S3NotFound('未找到相关记录')
+        return qs.filter(fod=False).all()
+
+    @staticmethod
+    def list_dir_queryset(bucket, dir_obj):
+        """
+        获取目录下的对象和目录列表信息
+
+        :param bucket: 桶实例
+        :param dir_obj: 目录实例
+        :return:
+                success:    QuerySet()   # django QuerySet实例
+                failed:      raise S3Error
+        """
+        collection_name = bucket.get_bucket_table_name()
+        bfm = BucketFileManagement(collection_name=collection_name)
+        _, qs = bfm.get_cur_dir_files(cur_dir_id=dir_obj.id)
+        return qs
 

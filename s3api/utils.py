@@ -153,7 +153,7 @@ class BucketFileManagement:
         :return:
         """
         c = self.get_obj_model_class()
-        return c(id=self.ROOT_DIR_ID, na='', name='')
+        return c(id=self.ROOT_DIR_ID, na='', name='', fod=False, did=self.ROOT_DIR_ID, si=0)
 
     def get_collection_name(self):
         return self._collection_name
@@ -410,4 +410,13 @@ class BucketFileManagement:
             raise Exception(msg)
 
         return obj
+
+    def get_objects_dirs_queryset(self):
+        """
+        获得所有文件对象和目录记录
+
+        :return: QuerySet()
+        """
+        model_class = self.get_obj_model_class()
+        return model_class.objects.all()
 
