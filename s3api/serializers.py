@@ -1,5 +1,16 @@
+from django.utils.timezone import utc
 from rest_framework import serializers
 from utils.storagers import EMPTY_HEX_MD5
+
+
+GMT_FORMAT = '%a, %d %b %Y %H:%M:%S GMT'
+
+
+def time_to_gmt(value):
+    try:
+        return serializers.DateTimeField(format=GMT_FORMAT, default_timezone=utc).to_representation(value)
+    except Exception as e:
+        return ''
 
 
 class BucketListSerializer(serializers.Serializer):

@@ -11,8 +11,6 @@ from django.apps import apps
 from django.conf import settings
 
 from buckets.models import BucketFileBase, get_str_hexMD5
-from utils.storagers import PathParser
-from . import exceptions
 
 
 logger = logging.getLogger('django.request')

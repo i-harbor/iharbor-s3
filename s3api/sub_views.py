@@ -1,6 +1,9 @@
 import base64
+import re
 
 from django.utils.translation import gettext as _
+from django.http import FileResponse, QueryDict
+from django.utils.http import urlquote
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.serializers import ValidationError
@@ -255,9 +258,10 @@ class ObjViewSet(CustomGenericViewSet):
     renderer_classes = [renders.CusXMLRenderer]
 
     def list(self, request, *args, **kwargs):
-        bucket_name = self.get_bucket_name(request)
-        obj_path_name = self.get_obj_path_name(request)
-        return Response(data={'bucket_name': bucket_name, 'obj_path_name': obj_path_name}, status=status.HTTP_200_OK)
+        """
+        get object
+        """
+        return self.s3_get_object(request=request, args=args, kwargs=kwargs)
 
     def update(self, request, *args, **kwargs):
         """
@@ -270,6 +274,167 @@ class ObjViewSet(CustomGenericViewSet):
         delete object
         """
         return self.delete_object(request=request, args=args, kwargs=kwargs)
+
+    def s3_get_object(self, request, args, kwargs):
+        bucket_name = self.get_bucket_name(request)
+        obj_path_name = self.get_obj_path_name(request)
+
+        part_number = request.query_params.get('partNumber', None)
+        response_content_disposition = request.query_params.get('response-content-disposition', None)
+        response_content_type = request.query_params.get('response-content-type', None)
+        response_content_encoding = request.query_params.get('response-content-encoding', None)
+        response_content_language = request.query_params.get('response-content-language', None)
+
+        if part_number is not None:
+            return self.exception_response(request, exceptions.S3InvalidPart(message=_('暂不支持参数PartNumber')))
+
+        # 存储桶验证和获取桶对象
+        hm = HarborManager()
+        try:
+            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if fileobj is None:
+            return self.exception_response(request, exceptions.S3NoSuchKey())
+
+        # 是否有文件对象的访问权限
+        try:
+            self.has_object_access_permission(request=request, bucket=bucket, obj=fileobj)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        filesize = fileobj.si
+        filename = fileobj.name
+        # 是否是断点续传部分读取
+        ranges = request.headers.get('range')
+        if ranges:
+            try:
+                offset, end = self.get_object_offset_and_end(ranges, filesize=filesize)
+            except exceptions.S3Error as e:
+                return self.exception_response(request, e)
+
+            generator = hm._get_obj_generator(bucket=bucket, obj=fileobj, offset=offset, end=end)
+            response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
+            response['Content-Range'] = f'bytes {offset}-{end}/{filesize}'
+            response['Content-Length'] = end - offset + 1
+        else:
+            generator = hm._get_obj_generator(bucket=bucket, obj=fileobj)
+            response = FileResponse(generator)
+            response['Content-Length'] = filesize
+
+            # 增加一次下载次数
+            fileobj.download_cound_increase()
+
+        last_modified = fileobj.upt if fileobj.upt else fileobj.ult
+        filename = urlquote(filename)  # 中文文件名需要
+        response['ETag'] = fileobj.md5
+        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
+        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
+        response['Content-Type'] = 'binary/octet-stream'  # 注意格式
+        response['Content-Disposition'] = f"attachment;filename*=utf-8''{filename}"  # 注意filename 这个是下载后的名字
+
+        # 用户设置的参数覆盖
+        if response_content_disposition:
+            response['Content-Disposition'] = response_content_disposition
+        if response_content_encoding:
+            response['Content-Encoding'] = response_content_encoding
+        if response_content_language:
+            response['Content-Language'] = response_content_language
+        if response_content_type:
+            response['Content-Type'] = response_content_type
+
+        return response
+
+    def get_object_offset_and_end(self, h_range: str, filesize: int):
+        """
+        获取读取开始偏移量和结束偏移量
+
+        :param h_range: range Header
+        :param filesize: 对象大小
+        :return:
+            (offset:int, end:int)
+
+        :raise S3Error
+        """
+        start, end = self.parse_header_range(h_range)
+        if start is None and end is None:
+            raise exceptions.S3InvalidRange()
+
+        if isinstance(start, int):
+            if start >= filesize or start < 0:
+                raise exceptions.S3InvalidRange()
+
+        end_max = filesize - 1
+        # 读最后end个字节
+        if (start is None) and isinstance(end, int):
+            offset = max(filesize - end, 0)
+            end = end_max
+        else:
+            offset = start
+            if isinstance(end, int):
+                end = min(end, end_max)
+            else:
+                end = end_max
+
+        return offset, end
+
+    @staticmethod
+    def parse_header_range(h_range: str):
+        """
+        parse Range header string
+
+        :param h_range: 'bytes={start}-{end}'  下载第M－N字节范围的内容
+        :return: (M, N)
+            start: int or None
+            end: int or None
+        """
+        m = re.match(r'bytes=(\d*)-(\d*)', h_range)
+        if not m:
+            return None, None
+        items = m.groups()
+
+        start = int(items[0]) if items[0] else None
+        end = int(items[1]) if items[1] else None
+        if isinstance(start, int) and isinstance(end, int) and start > end:
+            return None, None
+        return start, end
+
+    @staticmethod
+    def has_object_access_permission(request, bucket, obj):
+        """
+        当前已认证用户或未认证用户是否有访问对象的权限
+
+        :param request: 请求体对象
+        :param bucket: 存储桶对象
+        :param obj: 文件对象
+        :return:
+            True(可访问)
+            raise S3AccessDenied  # 不可访问
+
+        :raises: S3AccessDenied
+        """
+        # 存储桶是否是公有权限
+        if bucket.is_public_permission():
+            return True
+
+        # 存储桶是否属于当前用户
+        if bucket.check_user_own_bucket(request.user):
+            return True
+
+        # 对象是否共享的，并且在有效共享事件内
+        if not obj.is_shared_and_in_shared_time():
+            raise exceptions.S3AccessDenied(message=_('您没有访问权限'))
+
+        # 是否设置了分享密码
+        if obj.has_share_password():
+            p = request.query_params.get('p', None)
+            if p is None:
+                raise exceptions.S3AccessDenied(message=_('资源设有共享密码访问权限'))
+            if not obj.check_share_password(password=p):
+                raise exceptions.S3AccessDenied(message=_('共享密码无效'))
+
+        return True
 
     def put_object(self, request, args, kwargs):
         bucket_name = self.get_bucket_name(request)
