@@ -150,6 +150,7 @@ class BucketViewSet(CustomGenericViewSet):
     def list_objects_v2(self, request, *args, **kwargs):
         delimiter = request.query_params.get('delimiter', None)
         prefix = request.query_params.get('prefix', '')
+        fetch_owner = request.query_params.get('fetch-owner', '').lower()
         bucket_name = self.get_bucket_name(request)
 
         if not delimiter and not prefix:    # list所有对象和目录
@@ -190,7 +191,11 @@ class BucketViewSet(CustomGenericViewSet):
             objs_qs = hm.list_dir_queryset(bucket=bucket, dir_obj=obj)
             paginator.paginate_queryset(objs_qs, request=request)
             objs, _ = paginator.get_objects_and_dirs()
-            serializer = serializers.ObjectListSerializer(objs, many=True)
+
+            if fetch_owner == 'true':
+                serializer = serializers.ObjectListWithOwnerSerializer(objs, many=True, context={'user': request.user})
+            else:
+                serializer = serializers.ObjectListSerializer(objs, many=True)
 
             data = paginator.get_paginated_data(common_prefixes=True, delimiter=delimiter)
             ret_data.update(data)
@@ -202,7 +207,11 @@ class BucketViewSet(CustomGenericViewSet):
         if not obj.is_file():
             return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
 
-        serializer = serializers.ObjectListSerializer(obj)
+        if fetch_owner == 'true':
+            serializer = serializers.ObjectListWithOwnerSerializer(obj, context={'user': request.user})
+        else:
+            serializer = serializers.ObjectListSerializer(obj)
+
         ret_data['Contents'] = [serializer.data]
         ret_data['KeyCount'] = 1
         self.set_renderer(request, renders.ListObjectsV2XMLRenderer())

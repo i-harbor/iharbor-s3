@@ -1,3 +1,4 @@
+from django.utils.translation import gettext as _
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -6,6 +7,7 @@ from .renders import CusXMLRenderer
 from .viewsets import CustomGenericViewSet
 from buckets.models import Bucket
 from .serializers import BucketListSerializer
+from . import exceptions
 
 
 class MainHostViewSet(CustomGenericViewSet):
@@ -34,6 +36,9 @@ class MainHostViewSet(CustomGenericViewSet):
         </ListBucketsOutput>
         """
         user = request.user
+        if not user.id:
+            return self.exception_response(request, exceptions.S3AccessDenied(message=_('身份未认证')))
+
         buckets_qs = Bucket.objects.filter(user=user).all()    # user's own
         serializer = BucketListSerializer(buckets_qs, many=True)
 

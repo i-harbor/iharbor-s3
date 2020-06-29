@@ -65,3 +65,21 @@ class ObjectListSerializer(serializers.Serializer):
         return 'STANDARD'
 
 
+class ObjectListWithOwnerSerializer(ObjectListSerializer):
+    """
+    带owner信息的对象序列化器
+    """
+    Owner = serializers.SerializerMethodField(method_name='get_owner')
+
+    def get_owner(self, obj):
+        owner = self.context.get('owner', None)
+        if owner is not None:
+            return owner
+
+        user = self.context.get('user', None)
+        owner = {}
+        if user:
+            owner = {'ID': user.id, "DisplayName": user.username}
+
+        self.context['owner'] = owner
+        return owner

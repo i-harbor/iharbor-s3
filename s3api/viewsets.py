@@ -26,6 +26,8 @@ def exception_handler(exc, context):
         exc = exceptions.S3NotFound()
     elif isinstance(exc, PermissionDenied):
         exc = exceptions.S3AccessDenied()
+    elif isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
+        exc = exceptions.S3AccessDenied()
 
     if isinstance(exc, APIException):
         headers = {}
