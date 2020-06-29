@@ -5,7 +5,6 @@ from buckets.models import Bucket
 from .utils import BucketFileManagement
 from utils.storagers import PathParser
 from utils.oss import HarborObject, get_size
-from .paginations import BucketFileLimitOffsetPagination
 from . import exceptions
 
 
@@ -57,6 +56,23 @@ class HarborManager:
             return bucket
 
         return None
+
+    def get_public_or_user_bucket(self, name: str, user, all_public: bool = False):
+        """
+        获取公有权限桶或用户的桶
+        :param name: 桶名
+        :param user: 用户对象
+        :param all_public: 默认False(忽略); True(查找所有公有权限存储桶);
+        :return:
+            Bucket()
+        :raises: S3Error
+        """
+        bucket = self.get_bucket_by_name(name)
+        if not bucket:
+            raise exceptions.S3NoSuchBucket('存储桶不存在')
+
+        self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=all_public)
+        return bucket
 
     def is_dir(self, bucket_name: str, path_name: str):
         """
@@ -196,6 +212,9 @@ class HarborManager:
         :raises: S3Error
         """
         _, dir_name = PathParser(dir_path_name).get_path_and_filename()
+        if len(dir_name) > 255:
+            raise exceptions.S3InvalidSuchKey(_('目录名称长度最大为255字符'))
+
         bfm = BucketFileManagement(collection_name=table_name)
         object_class = bfm.get_obj_model_class()
         dir1 = object_class(na=dir_path_name,  # 全路经目录名
@@ -355,13 +374,13 @@ class HarborManager:
         table_name = bucket.get_bucket_table_name()
         dir1, bfm = self._get_obj_or_dir_and_bfm(table_name=table_name, path=path, name=dir_name)
 
-        if not dir or dir.is_file():
+        if not dir1 or dir1.is_file():
             raise exceptions.S3NoSuchKey('目录不存在')
 
-        if not bfm.dir_is_empty(dir):
+        if not bfm.dir_is_empty(dir1):
             raise exceptions.S3InvalidRequest('无法删除非空目录')
 
-        if not dir.do_delete():
+        if not dir1.do_delete():
             raise exceptions.S3InternalError('删除目录元数据失败')
 
         return True
@@ -389,84 +408,6 @@ class HarborManager:
         if not ok:
             raise exceptions.S3NotFound('未找到相关记录')
         return qs, bucket
-
-    def list_dir_generator(self, bucket_name: str, path: str, per_num: int = 1000, user=None, paginator=None):
-        """
-        获取目录下的文件列表信息生成器
-
-        :param bucket_name: 桶名
-        :param path: 目录路径
-        :param per_num: 每次获取文件信息数量
-        :param user: 用户，默认为None，如果给定用户只获取属于此用户的目录下的文件列表信息（只查找此用户的存储桶）
-        :param paginator: 分页器，默认为None
-        :return:
-                generator           # success
-                :raise S3Error  # failed
-        :usage:
-            for objs in generator:
-                print(objs)         # objs type list, raise HarborError when error
-
-        :raise S3Error
-        """
-        qs, _ = self._list_dir_queryset(bucket_name=bucket_name, path=path, user=user)
-
-        def generator(queryset, per_num, paginator=None):
-            offset = 0
-            limit = per_num
-            if paginator is None:
-                paginator = BucketFileLimitOffsetPagination()
-
-            while True:
-                try:
-                    ret = paginator.pagenate_to_list(queryset, offset=offset, limit=limit)
-                except Exception as e:
-                    raise exceptions.S3InternalError(str(e))
-
-                yield ret
-                l = len(ret)
-                if l < per_num:
-                    return
-                offset = offset + l
-
-        return generator(queryset=qs, per_num=per_num, paginator=paginator)
-
-    def list_dir(self, bucket_name: str, path: str, offset: int = 0, limit: int = 1000, user=None, paginator=None):
-        """
-        获取目录下的文件列表信息
-
-        :param bucket_name: 桶名
-        :param path: 目录路径
-        :param offset: 目录下文件列表偏移量
-        :param limit: 获取文件信息数量
-        :param user: 用户，默认为None，如果给定用户只获取属于此用户的目录下的文件列表信息（只查找此用户的存储桶）
-        :param paginator: 分页器，默认为None
-        :return:
-                success:    (list[object, object,], bucket) # list和bucket实例
-                failed:      raise S3Error
-
-        :raise S3Error
-        """
-        files, bucket = self._list_dir_queryset(bucket_name=bucket_name, path=path, user=user)
-
-        if paginator is None:
-            paginator = BucketFileLimitOffsetPagination()
-        if limit <= 0:
-            limit = paginator.default_limit
-        else:
-            limit = min(limit, paginator.max_limit)
-
-        if offset < 0:
-            offset = 0
-
-        paginator.offset = offset
-        paginator.limit = limit
-
-        try:
-            l = paginator.pagenate_to_list(files, offset=offset, limit=limit)
-        except Exception as e:
-            raise exceptions.S3InternalError(str(e))
-
-        return l, bucket
 
     def move_rename(self, bucket_name: str, obj_path: str, rename=None, move=None, user=None):
         """
@@ -570,43 +511,6 @@ class HarborManager:
                 raise exceptions.S3InvalidRequest('对象名称不能大于255个字符长度')
 
         return move_to, rename
-
-    def write_chunk(self, bucket_name: str, obj_path: str, offset: int, chunk: bytes, reset: bool = False, user=None):
-        """
-        向对象写入一个数据块
-
-        :param bucket_name: 桶名
-        :param obj_path: 对象全路径
-        :param offset: 写入对象偏移量
-        :param chunk: 要写入的数据，bytes
-        :param reset: 为True时，先重置对象大小为0后再写入数据；
-        :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
-        :return:
-                created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise S3Error   # 写入失败
-        """
-        if not isinstance(chunk, bytes):
-            raise exceptions.S3InvalidRequest('数据不是bytes类型')
-
-        return self.write_to_object(bucket_name=bucket_name, obj_path=obj_path, offset=offset, data=chunk,
-                                    reset=reset, user=user)
-
-    def write_file(self, bucket_name: str, obj_path: str, offset: int, file, reset: bool = False, user=None):
-        """
-        向对象写入一个文件
-
-        :param bucket_name: 桶名
-        :param obj_path: 对象全路径
-        :param offset: 写入对象偏移量
-        :param file: 要写入的数据，已打开的类文件句柄
-        :param reset: 为True时，先重置对象大小为0后再写入数据；
-        :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
-        :return:
-                created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise S3Error   # 写入失败
-        """
-        return self.write_to_object(bucket_name=bucket_name, obj_path=obj_path, offset=offset, data=file,
-                                    reset=reset, user=user)
 
     def write_to_object(self, bucket_name: str, obj_path: str, offset: int, data, reset: bool = False, user=None):
         """
@@ -1086,10 +990,7 @@ class HarborManager:
             raise exceptions.S3InvalidRequest('bucket_name参数有误')
 
         # 存储桶验证和获取桶对象
-        bucket = self.get_bucket_by_name(bucket_name)
-        if not bucket:
-            raise exceptions.S3NoSuchBucket('存储桶不存在')
-        self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=all_public)
+        bucket = self.get_public_or_user_bucket(name=bucket_name, user=user, all_public=all_public)
 
         if not dir_path and not filename:
             root_dir = BucketFileManagement().root_dir()

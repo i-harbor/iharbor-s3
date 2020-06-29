@@ -275,13 +275,23 @@ class ObjViewSet(CustomGenericViewSet):
     def update(self, request, *args, **kwargs):
         """
         put object
+        create dir
         """
+        key = self.get_s3_obj_key(request)
+        if key.endswith('/'):
+            return self.create_dir(request=request, args=args, kwargs=kwargs)
+
         return self.put_object(request, args, kwargs)
 
     def destroy(self, request, *args, **kwargs):
         """
         delete object
+        delete dir
         """
+        key = self.get_s3_obj_key(request)
+        if key.endswith('/'):
+            return self.delete_dir(request=request, args=args, kwargs=kwargs)
+
         return self.delete_object(request=request, args=args, kwargs=kwargs)
 
     def s3_get_object(self, request, args, kwargs):
@@ -564,7 +574,52 @@ class ObjViewSet(CustomGenericViewSet):
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        return Response(status=status.HTTP_204_NO_CONTENT, headers={'x-amz-delete-marker': 'true'})
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def create_dir(self, request, args, kwargs):
+        bucket_name = self.get_bucket_name(request)
+        dir_path_name = self.get_obj_path_name(request)
+
+        if not dir_path_name:
+            return self.exception_response(request, exceptions.S3InvalidSuchKey())
+
+        content_length = self.request.headers.get('Content-Length', None)
+        if content_length is None:
+            return self.exception_response(request, exceptions.S3MissingContentLength())
+
+        try:
+            content_length = int(content_length)
+        except Exception:
+            return self.exception_response(request, exceptions.S3InvalidContentLength())
+
+        if content_length != 0:
+            return self.exception_response(request, exceptions.S3InvalidContentLength())
+
+        hm = HarborManager()
+        bucket = hm.get_user_own_bucket(name=bucket_name, user=request.user)
+        if not bucket:
+            return self.exception_response(request, exceptions.S3NoSuchBucket())
+
+        table_name = bucket.get_bucket_table_name()
+        try:
+            hm.create_path(table_name=table_name, path=dir_path_name)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        return Response(status=status.HTTP_200_OK, headers={'ETag': EMPTY_HEX_MD5})
+
+    def delete_dir(self, request, args, kwargs):
+        bucket_name = self.get_bucket_name(request)
+        dir_path_name = self.get_obj_path_name(request)
+        if not dir_path_name:
+            return self.exception_response(request, exceptions.S3InvalidSuchKey())
+
+        try:
+            HarborManager().rmdir(bucket_name=bucket_name, dirpath=dir_path_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_parsers(self):
         """

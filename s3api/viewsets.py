@@ -98,13 +98,21 @@ class CustomGenericViewSet(GenericViewSet):
         return ''
 
     @staticmethod
-    def get_obj_path_name(request):
+    def get_s3_obj_key(request):
         """
         从url path中获取对象key
 
         :return: str
         """
-        key: str = request.path
+        return request.path
+
+    def get_obj_path_name(self, request):
+        """
+        获取对象路径
+
+        :return: str
+        """
+        key = self.get_s3_obj_key(request)
         return key.strip('/')
 
     def set_renderer(self, request, renderer):

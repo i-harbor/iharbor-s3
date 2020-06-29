@@ -212,6 +212,12 @@ class S3MissingContentLength(S3Error):
     default_status_code = 411
 
 
+class S3InvalidContentLength(S3Error):
+    default_message = "Invalid Content-Length HTTP header."
+    default_code = 'InvalidContentLength'
+    default_status_code = 411
+
+
 class S3RequestIsNotMultiPartContent(S3Error):
     default_message = "Bucket POST must be of the enclosure-type multipart/form-data."
     default_code = 'RequestIsNotMultiPartContent'
