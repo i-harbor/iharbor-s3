@@ -1,9 +1,12 @@
 from urllib import parse
-from collections import OrderedDict
 
 from django.utils.encoding import force_str
-from rest_framework.pagination import CursorPagination, LimitOffsetPagination, _divide_with_ceil
-from rest_framework.response import Response
+from django.utils.translation import gettext as _
+from rest_framework.pagination import CursorPagination, Cursor
+from rest_framework.exceptions import NotFound
+
+from . import exceptions
+from .harbor import HarborManager
 
 
 def get_query_param(url, key):
@@ -33,7 +36,24 @@ class ListObjectsV2CursorPagination(CursorPagination):
     page_size_query_param = 'max-keys'
     page_size_query_description = 'Max number of results to return per page.'
 
-    max_page_size = 5000
+    max_page_size = 1000
+    offset_cutoff = 0
+
+    start_after_query_param = 'start-after'     # used if no cursor_query_param
+
+    def __init__(self, context):
+        """
+        :param context:
+            {
+                'bucket': bucket,
+                'bucket_name': bucket_name,
+                ...
+            }
+        """
+        if 'bucket' not in context and 'bucket_name' not in context:
+            raise ValueError('Invalid param "context", one of "bucket" and "bucket_name" needs to be in it.')
+
+        self._context = context
 
     def paginate_queryset(self, queryset, request, view=None):
         self.request = request
@@ -110,153 +130,62 @@ class ListObjectsV2CursorPagination(CursorPagination):
 
         return params[0]
 
+    def decode_cursor(self, request):
+        try:
+            cursor = super().decode_cursor(request)
+        except NotFound as e:
+            raise exceptions.S3InvalidArgument(message=_('无效的参数continuation-token'))
 
-class BucketFileLimitOffsetPagination(LimitOffsetPagination):
-    """
-    存储桶分页器
-    """
-    default_limit = 200
-    limit_query_param = 'limit'
-    offset_query_param = 'offset'
-    max_limit = 2000
+        if cursor:
+            return cursor
 
-    def paginate_queryset(self, queryset, request, view=None):
-        limit = self.get_limit(request)
-        offset = self.get_offset(request)
-        return self.pagenate_to_list(queryset, request=request, offset=offset, limit=limit)
+        start_after = request.query_params.get(self.start_after_query_param, None)
+        if not start_after:
+            return None
 
-    def pagenate_to_list(self, queryset, offset, limit, request=None):
-        if request:
-            self.request = request
+        start_after = start_after.strip('/')
+        if start_after:
+            cursor = self._get_start_after_cursor(start_after=start_after)
+            return cursor
 
-        self.offset = offset
-        self.limit = limit
+        return None
 
-        if not hasattr(self, 'count'):      # 避免多次调用时重复查询
-            self.count = self.get_count(queryset)
+    def _get_start_after_cursor(self, start_after):
+        """
+        获取分页起始参数start_after对应的游标cursor
 
-        count = self.count
-        if count > limit and self.template is not None:
-            self.display_page_controls = True
+        :param start_after: 对象Key
+        :return:
+            Cursor() or None
 
-        if count == 0 or offset > count:
-            self.offset = self.count
-            return []
+        :raises: S3Error
+        """
+        hm = HarborManager()
+        bucket = self._context.get('bucket', None)
+        if not bucket:
+            bucket_name = self._context('bucket_name')
+            bucket = hm.get_bucket(bucket_name=bucket_name)
 
-        # 当数据少时
-        if count <= 10000:
-            return list(queryset[offset:offset+limit])
+        if not bucket:
+            return None
 
-        # 当数据很多时，目录和对象分开考虑
-        dirs_queryset = queryset.filter(fod=False).order_by('-id')
-        dirs_count = dirs_queryset.count()
-        # 分页数据只有目录
-        if (offset + limit) <= dirs_count:
-            return list(dirs_queryset[offset:offset+limit])
+        table_name = bucket.get_bucket_table_name()
+        try:
+            obj = HarborManager().get_metadata_obj(table_name=table_name, path=start_after)
+        except exceptions.S3Error as e:
+            raise e
 
-        objs_queryset = queryset.filter(fod=True).order_by('-id')
-        # 分页数据只有对象
-        if offset >= dirs_count:
-            oft = offset - dirs_count
-            # 偏移量offset较小时
-            if oft <= 10000:
-                return list(objs_queryset[oft:oft+limit])
+        if not obj:
+            raise exceptions.S3NoSuchKey(_('无效的参数start_after'))
 
-            # 偏移量offset较大时
-            id = objs_queryset.values_list('id').order_by('-id')[oft:oft+1].first()
-            if not id:
-                return []
-            return list(objs_queryset.filter(id__lte=id[0])[0:limit])
-
-        # 分页数据包含目录和对象
-        dirs = list(dirs_queryset[offset:offset + limit])
-        dir_len = len(dirs)
-        objs = list(objs_queryset[0:limit - dir_len])
-        return dirs + objs
-
-    def get_paginated_response(self, data):
-        # content = self.get_html_context()
-        current, final = self.get_current_and_final_page_number()
-        d = OrderedDict([
-            ('count', self.count),
-            ('next', self.get_next_link()),
-            ('page', {'current': current, 'final': final}),
-            ('previous', self.get_previous_link()),
-            # ('page_links', content['page_links'])
-        ])
-        if isinstance(data, OrderedDict):
-            data.update(d)
-        return Response(data)
-
-    def get_current_and_final_page_number(self):
-        if self.limit:
-            current = _divide_with_ceil(self.offset, self.limit) + 1
-
-            # The number of pages is a little bit fiddly.
-            # We need to sum both the number of pages from current offset to end
-            # plus the number of pages up to the current offset.
-            # When offset is not strictly divisible by the limit then we may
-            # end up introducing an extra page as an artifact.
-            final = (
-                _divide_with_ceil(self.count - self.offset, self.limit) +
-                _divide_with_ceil(self.offset, self.limit)
-            )
-
-            if final < 1:
-                final = 1
+        order = self.ordering[0]
+        is_reversed = order.startswith('-')
+        attr = obj.id       # order by id
+        if is_reversed:     # 倒序
+            position = max(attr - 1, 0)
+            reverse = False
         else:
-            current = 1
-            final = 1
+            position = attr + 1
+            reverse = True
 
-        if current > final:
-            current = final
-
-        return current, final
-
-
-class BucketsLimitOffsetPagination(LimitOffsetPagination):
-    """
-    存储桶分页器
-    """
-    default_limit = 100
-    limit_query_param = 'limit'
-    offset_query_param = 'offset'
-    max_limit = 1000
-
-    def get_paginated_response(self, data):
-        # content = self.get_html_context()
-        current, final = self.get_current_and_final_page_number()
-        return Response(OrderedDict([
-            ('count', self.count),
-            ('next', self.get_next_link()),
-            ('page', {'current': current, 'final': final}),
-            ('previous', self.get_previous_link()),
-            ('buckets', data),
-            # ('page_links', content['page_links'])
-        ]))
-
-    def get_current_and_final_page_number(self):
-        if self.limit:
-            current = _divide_with_ceil(self.offset, self.limit) + 1
-
-            # The number of pages is a little bit fiddly.
-            # We need to sum both the number of pages from current offset to end
-            # plus the number of pages up to the current offset.
-            # When offset is not strictly divisible by the limit then we may
-            # end up introducing an extra page as an artifact.
-            final = (
-                _divide_with_ceil(self.count - self.offset, self.limit) +
-                _divide_with_ceil(self.offset, self.limit)
-            )
-
-            if final < 1:
-                final = 1
-        else:
-            current = 1
-            final = 1
-
-        if current > final:
-            current = final
-
-        return (current, final)
-
+        return Cursor(offset=0, reverse=reverse, position=position)

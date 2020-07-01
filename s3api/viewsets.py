@@ -41,8 +41,9 @@ def exception_handler(exc, context):
         else:
             data = {'detail': exc.detail}
 
+        e = exceptions.S3Error(message=str(data), status_code=exc.status_code, code=exc.default_code)
         set_rollback()
-        return Response(data, status=exc.status_code, headers=headers)
+        return Response(e.err_data(), status=e.status_code, headers=headers)
 
     if isinstance(exc, exceptions.S3Error):
         set_rollback()
@@ -71,7 +72,7 @@ class CustomGenericViewSet(GenericViewSet):
 
         # 用户最后活跃日期
         user = request.user
-        if user.id and user.id > 0:
+        if user.id:
             try:
                 date = timezone.now().date()
                 if user.last_active < date:
@@ -89,7 +90,7 @@ class CustomGenericViewSet(GenericViewSet):
             bucket name     # BucketName.SERVER_HTTP_HOST_NAME
             ''              # SERVER_HTTP_HOST_NAME or other
         """
-        main_host = getattr(settings, 'SERVER_HTTP_HOST_NAME', 'obs.cstcloud.cn')
+        main_host = getattr(settings, 'SERVER_HTTP_HOST_NAME', 's3.obs.cstcloud.cn')
         host = request.get_host()
         if host.endswith('.' + main_host):
             bucket_name, _ = host.split('.', maxsplit=1)
@@ -163,3 +164,10 @@ class CustomGenericViewSet(GenericViewSet):
         """
         self.set_renderer(request, CusXMLRenderer(root_tag_name='Error'))  # xml渲染器
         return Response(data=exc.err_data(), status=exc.status_code)
+
+    def head(self, request, *args, **kwargs):
+        """
+        Default handler method for HTTP 'HEAD' request.
+        """
+        return self.exception_response(request, exceptions.S3MethodNotAllowed())
+

@@ -26,6 +26,7 @@ from . import paginations
 
 
 class BucketViewSet(CustomGenericViewSet):
+    http_method_names = ['get', 'put', 'delete', 'head', 'options']
     renderer_classes = [renders.CusXMLRenderer]
 
     def list(self, request, *args, **kwargs):
@@ -58,6 +59,15 @@ class BucketViewSet(CustomGenericViewSet):
         """
         delete bucket
         """
+        return self.delete_bucket(request=request, args=args, kwargs=kwargs)
+
+    def head(self, request, *args, **kwargs):
+        """
+        head bucket
+        """
+        return self.head_bucket(request=request, args=args, kwargs=kwargs)
+
+    def delete_bucket(self, request, *args, **kwargs):
         bucket_name = self.get_bucket_name(request)
         if not bucket_name:
             return self.exception_response(request, exceptions.S3InvalidRequest('Invalid request domain name'))
@@ -73,6 +83,23 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, exceptions.S3InternalError(_('删除存储桶失败')))
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def head_bucket(self, request, *args, **kwargs):
+        bucket_name = self.get_bucket_name(request)
+        if not bucket_name:
+            return self.exception_response(request, exceptions.S3InvalidRequest('Invalid request domain name'))
+
+        bucket = Bucket.get_bucket_by_name(bucket_name)
+        if not bucket_name:
+            return self.exception_response(request, exceptions.S3NoSuchBucket())
+
+        if bucket.is_public_permission():
+            return Response(status=status.HTTP_200_OK)
+
+        if not bucket.check_user_own_bucket(user=request.user):
+            return self.exception_response(request, exceptions.S3AccessDenied())
+
+        return Response(status=status.HTTP_200_OK)
 
     @staticmethod
     def validate_create_bucket(request, bucket_name: str):
@@ -153,18 +180,16 @@ class BucketViewSet(CustomGenericViewSet):
         fetch_owner = request.query_params.get('fetch-owner', '').lower()
         bucket_name = self.get_bucket_name(request)
 
-        if not delimiter and not prefix:    # list所有对象和目录
-            return self.list_objects_v2_list_all(request=request, prefix=prefix)
+        if not delimiter:    # list所有对象和目录
+            return self.list_objects_v2_list_prefix(request=request, prefix=prefix)
+
+        if delimiter != '/':
+            return self.exception_response(request, exceptions.S3InvalidArgument(_('参数“delimiter”必须是“/”')))
 
         path = prefix.strip('/')
         if prefix and not path:     # prefix invalid, return no match data
             return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
 
-        if delimiter is None or delimiter != '/':
-            e = exceptions.S3InvalidRequest(message=_('Unsupported, if param "prefix" is not empty, param "delimiter" must be "/"'))
-            return self.exception_response(request, e)
-
-        delimiter = '/'
         hm = HarborManager()
         try:
             bucket, obj = hm.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path, user=request.user)
@@ -174,10 +199,10 @@ class BucketViewSet(CustomGenericViewSet):
         if obj is None:
             return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
 
-        paginator = paginations.ListObjectsV2CursorPagination()
+        paginator = paginations.ListObjectsV2CursorPagination(context={'bucket': bucket})
         max_keys = paginator.get_page_size(request=request)
         ret_data = {
-            'IsTruncated': 'false',     # can not use True
+            'IsTruncated': 'false',     # can not use bool
             'Name': bucket_name,
             'Prefix': prefix,
             'EncodingType': 'url',
@@ -217,20 +242,25 @@ class BucketViewSet(CustomGenericViewSet):
         self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
         return Response(data=ret_data, status=status.HTTP_200_OK)
 
-    def list_objects_v2_list_all(self, request, prefix):
+    def list_objects_v2_list_prefix(self, request, prefix):
         """
         列举所有对象和目录
         """
+        fetch_owner = request.query_params.get('fetch-owner', '').lower()
+
         bucket_name = self.get_bucket_name(request)
         hm = HarborManager()
         try:
-            bucket, objs_qs = hm.get_bucket_objects_dirs_queryset(bucket_name=bucket_name, user=request.user)
+            bucket, objs_qs = hm.get_bucket_objects_dirs_queryset(bucket_name=bucket_name, user=request.user, prefix=prefix)
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        paginator = paginations.ListObjectsV2CursorPagination()
+        paginator = paginations.ListObjectsV2CursorPagination(context={'bucket': bucket})
         objs_dirs = paginator.paginate_queryset(objs_qs, request=request)
-        serializer = serializers.ObjectListSerializer(objs_dirs, many=True)
+        if fetch_owner == 'true':
+            serializer = serializers.ObjectListWithOwnerSerializer(objs_dirs, many=True, context={'user': request.user})
+        else:
+            serializer = serializers.ObjectListSerializer(objs_dirs, many=True)
 
         data = paginator.get_paginated_data()
         data['Contents'] = serializer.data
@@ -271,6 +301,17 @@ class ObjViewSet(CustomGenericViewSet):
         get object
         """
         return self.s3_get_object(request=request, args=args, kwargs=kwargs)
+
+    def create(self, request, *args, **kwargs):
+        """
+        CreateMultipartUpload
+        """
+        uploads = request.query_params.get('uploads', None)
+        if uploads is None:
+            return self.exception_response(request, exceptions.S3MethodNotAllowed())
+
+        self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        return Response(data={'CreateMultipartUpload': '创建多部份上传'}, status=status.HTTP_200_OK)
 
     def update(self, request, *args, **kwargs):
         """

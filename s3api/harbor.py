@@ -1079,10 +1079,13 @@ class HarborManager:
 
         return False
 
-    def get_bucket_objects_dirs_queryset(self, bucket_name: str, user):
+    def get_bucket_objects_dirs_queryset(self, bucket_name: str, user, prefix: str = ''):
         """
         获得所有对象和目录记录
 
+        :param bucket_name: 桶名
+        :param user: 用户对象
+        :param prefix: 路径前缀
         :return:
             bucket, QuerySet()
 
@@ -1095,7 +1098,11 @@ class HarborManager:
         self.check_public_or_user_bucket(bucket=bucket, user=user, all_public=False)
 
         table_name = bucket.get_bucket_table_name()
-        objs = self.get_objects_dirs_queryset(table_name=table_name)
+        if not prefix:
+            objs = self.get_objects_dirs_queryset(table_name=table_name)
+        else:
+            objs = self.get_prefix_objects_dirs_queryset(table_name=table_name, prefix=prefix)
+
         return bucket, objs
 
     def get_objects_dirs_queryset(self, table_name: str):
@@ -1135,6 +1142,23 @@ class HarborManager:
         """
         collection_name = bucket.get_bucket_table_name()
         bfm = BucketFileManagement(collection_name=collection_name)
-        _, qs = bfm.get_cur_dir_files(cur_dir_id=dir_obj.id)
+        try:
+            _, qs = bfm.get_cur_dir_files(cur_dir_id=dir_obj.id)
+        except Exception as e:
+            raise exceptions.S3InternalError(message=str(e))
+
         return qs
+
+    @staticmethod
+    def get_prefix_objects_dirs_queryset(table_name: str, prefix: str):
+        """
+        获取存储桶下指定路径前缀的对象和目录查询集
+
+        :param table_name: 桶对应的数据库表名
+        :param prefix: 路径前缀
+        :return:
+                success:    QuerySet()   # django QuerySet实例
+        """
+        bfm = BucketFileManagement(collection_name=table_name)
+        return bfm.get_prefix_objects_dirs_queryset(prefix=prefix)
 
