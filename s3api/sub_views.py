@@ -18,7 +18,8 @@ from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_f
                     delete_table_for_model_class)
 from . import exceptions
 from .harbor import HarborManager
-from utils.storagers import FileUploadToCephHandler, EMPTY_BYTES_MD5, EMPTY_HEX_MD5
+from utils.storagers import FileUploadToCephHandler
+from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5
 from utils.oss.pyrados import HarborObject, RadosError
 from buckets.models import BucketFileBase
 from . import serializers
@@ -294,6 +295,7 @@ class BucketViewSet(CustomGenericViewSet):
 
 
 class ObjViewSet(CustomGenericViewSet):
+    http_method_names = ['get', 'post', 'put', 'delete', 'options']
     renderer_classes = [renders.CusXMLRenderer]
 
     def list(self, request, *args, **kwargs):

@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import F
 
 from utils.storagers import PathParser
+from utils.md5 import EMPTY_HEX_MD5
 
 
 def rand_hex_string(length=10):
@@ -485,6 +486,13 @@ class BucketFileBase(models.Model):
     @property
     def obj_size(self):
         return self.si
+
+    @property
+    def hex_md5(self):
+        if self.is_dir() or self.obj_size == 0:
+            return EMPTY_HEX_MD5
+
+        return self.md5
 
     def set_shared(self, share=SHARE_ACCESS_NO, days=0, password: str = ''):
         """

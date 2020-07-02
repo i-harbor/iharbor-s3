@@ -1,6 +1,5 @@
 from django.utils.timezone import utc
 from rest_framework import serializers
-from utils.storagers import EMPTY_HEX_MD5
 
 
 GMT_FORMAT = '%a, %d %b %Y %H:%M:%S GMT'
@@ -52,9 +51,7 @@ class ObjectListSerializer(serializers.Serializer):
 
     @staticmethod
     def get_etag(obj):
-        if obj.is_dir():
-            return EMPTY_HEX_MD5
-        return obj.md5
+        return obj.hex_md5
 
     @staticmethod
     def get_size(obj):
