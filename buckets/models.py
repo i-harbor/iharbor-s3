@@ -11,18 +11,11 @@ from django.contrib.auth import get_user_model
 from django.db.models import F
 
 from utils.storagers import PathParser
-from utils.md5 import EMPTY_HEX_MD5
+from utils.md5 import EMPTY_HEX_MD5, get_str_hexMD5
 
 
 def rand_hex_string(length=10):
     return binascii.hexlify(os.urandom(length//2)).decode()
-
-
-def get_str_hexMD5(s: str):
-    """
-    求字符串MD5
-    """
-    return hashlib.md5(s.encode(encoding='utf-8')).hexdigest()
 
 
 # 获取用户模型
@@ -146,6 +139,12 @@ class Bucket(models.Model):
             self.save()
 
         return self.collection_name
+
+    def get_parts_table_name(self):
+        """
+        bucket对应的对象分段元数据数据库表名
+        """
+        return f'parts_{self.id}'
 
     def set_permission(self, public: int = 2):
         """
@@ -419,6 +418,9 @@ SHARE_ACCESS_NO = 0
 SHARE_ACCESS_READONLY = 1
 SHARE_ACCESS_READWRITE = 2
 
+STATUS_DONE = 0
+STATUS_UPLOADING = 1
+
 
 class BucketFileBase(models.Model):
     """
@@ -452,6 +454,13 @@ class BucketFileBase(models.Model):
         (SHARE_ACCESS_READWRITE, '可读可写'),
     )
 
+    STATUS_DONE = STATUS_DONE
+    STATUS_UPLOADING = STATUS_UPLOADING
+    STATUS_CHOICES = (
+        (STATUS_DONE, '上传完成'),
+        (STATUS_UPLOADING, '上传中')
+    )
+
     id = models.BigAutoField(auto_created=True, primary_key=True)
     na = models.TextField(verbose_name='全路径文件名或目录名')
     na_md5 = models.CharField(max_length=32, null=True, default=None, verbose_name='全路径MD5值')
@@ -475,7 +484,6 @@ class BucketFileBase(models.Model):
         app_label = 'metadata'  # 用于db路由指定此模型对应的数据库
         ordering = ['fod', '-id']
         indexes = [models.Index(fields=('na_md5',), name='na_md5_idx')]
-        index_together = ['fod', 'did']
         unique_together = ('did', 'name')
         verbose_name = '对象模型抽象基类'
         verbose_name_plural = verbose_name

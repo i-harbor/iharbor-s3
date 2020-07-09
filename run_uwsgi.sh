@@ -1,0 +1,1 @@
+uwsgi --ini iharbor-s3-uwsgi.ini

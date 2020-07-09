@@ -87,7 +87,11 @@ def is_model_table_exists(model):
     """
     using = router.db_for_write(model)
     connection = connections[using]
-    return model.Meta.db_table in connection.introspection.table_names()
+    if hasattr(model, '_meta'):
+        db_table = model._meta.db_table
+    else:
+        db_table = model.Meta.db_table
+    return db_table in connection.introspection.table_names()
 
 
 def get_obj_model_class(table_name):

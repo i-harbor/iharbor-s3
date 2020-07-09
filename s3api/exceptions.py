@@ -70,6 +70,12 @@ class S3InvalidSuchKey(S3Error):
     default_status_code = 400
 
 
+class S3KeyTooLongError(S3Error):
+    default_message = "The specified object key is too long.The length cannot be greater than 1024 characters."
+    default_code = 'KeyTooLongError'
+    default_status_code = 400
+
+
 class S3InvalidRange(S3Error):
     default_message = 'The requested range cannot be satisfied.'
     default_code = 'InvalidRange'

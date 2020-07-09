@@ -104,14 +104,20 @@ class CustomGenericViewSet(GenericViewSet):
         从url path中获取对象key
 
         :return: str
+        :raises: S3KeyTooLongError
         """
-        return request.path
+        s3_key = request.path
+        if len(s3_key) > 1024:
+            raise exceptions.S3KeyTooLongError()
+
+        return s3_key
 
     def get_obj_path_name(self, request):
         """
         获取对象路径
 
         :return: str
+        :raises: S3KeyTooLongError
         """
         key = self.get_s3_obj_key(request)
         return key.strip('/')

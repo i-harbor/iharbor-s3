@@ -1,5 +1,3 @@
-import hashlib
-
 from django.conf import settings
 from django.core.files.uploadhandler import FileUploadHandler
 from django.core.files.uploadedfile import UploadedFile

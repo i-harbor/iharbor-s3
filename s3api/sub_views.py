@@ -24,6 +24,7 @@ from utils.oss.pyrados import HarborObject, RadosError
 from buckets.models import BucketFileBase
 from . import serializers
 from . import paginations
+from .managers import get_parts_model_class, MultipartUploadManager
 
 
 class BucketViewSet(CustomGenericViewSet):
@@ -168,10 +169,17 @@ class BucketViewSet(CustomGenericViewSet):
         bfm = BucketFileManagement(collection_name=col_name)
         model_class = bfm.get_obj_model_class()
         if not create_table_for_model_class(model=model_class):
-            if not create_table_for_model_class(model=model_class):
-                bucket.delete()
-                delete_table_for_model_class(model=model_class)
-                return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶表错误')))
+            bucket.delete()
+            delete_table_for_model_class(model=model_class)
+            return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶object表错误')))
+
+        part_table_name = bucket.get_parts_table_name()
+        parts_class = get_parts_model_class(table_name=part_table_name)
+        if not create_table_for_model_class(model=parts_class):
+            bucket.delete()
+            delete_table_for_model_class(model=parts_class)
+            delete_table_for_model_class(model=model_class)
+            return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶parts表错误')))
 
         return Response(status=status.HTTP_200_OK)
 
@@ -312,8 +320,7 @@ class ObjViewSet(CustomGenericViewSet):
         if uploads is None:
             return self.exception_response(request, exceptions.S3MethodNotAllowed())
 
-        self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
-        return Response(data={'CreateMultipartUpload': '创建多部份上传'}, status=status.HTTP_200_OK)
+        return self.create_multipart_upload(request=request, args=args, kwargs=kwargs)
 
     def update(self, request, *args, **kwargs):
         """
@@ -498,7 +505,7 @@ class ObjViewSet(CustomGenericViewSet):
 
         return True
 
-    def put_object(self, request, args, kwargs):
+    def create_object_metadata(self, request):
         bucket_name = self.get_bucket_name(request)
         obj_path_name = self.get_obj_path_name(request)
 
@@ -507,15 +514,11 @@ class ObjViewSet(CustomGenericViewSet):
                        'public-read-write': BucketFileBase.SHARE_ACCESS_READWRITE}
         x_amz_acl = request.headers.get('X-Amz-Acl', 'private').lower()
         if x_amz_acl not in acl_choices:
-            e = exceptions.S3InvalidRequest(f'The value {x_amz_acl} of header "x-amz-acl" is not supported.')
-            return self.exception_response(request, e)
+            raise exceptions.S3InvalidRequest(f'The value {x_amz_acl} of header "x-amz-acl" is not supported.')
 
         h_manager = HarborManager()
-        try:
-            bucket, obj, created = h_manager.create_empty_obj(bucket_name=bucket_name, obj_path=obj_path_name,
-                                                              user=request.user)
-        except exceptions.S3Error as e:
-            return self.exception_response(request, e)
+        bucket, obj, created = h_manager.create_empty_obj(bucket_name=bucket_name, obj_path=obj_path_name,
+                                                          user=request.user)
 
         if x_amz_acl != 'private':
             share_code = acl_choices[x_amz_acl]
@@ -529,7 +532,15 @@ class ObjViewSet(CustomGenericViewSet):
             try:
                 h_manager._pre_reset_upload(obj=obj, rados=rados)  # 重置对象大小
             except Exception as exc:
-                return self.exception_response(request, exceptions.S3InvalidRequest(f'reset object error, {str(exc)}'))
+                raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
+
+        return bucket, obj, rados, created
+
+    def put_object(self, request, args, kwargs):
+        try:
+            bucket, obj, rados, created = self.create_object_metadata(request=request)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
 
         return self.put_object_handle(request=request, bucket=bucket, obj=obj, rados=rados, created=created)
 
@@ -673,3 +684,33 @@ class ObjViewSet(CustomGenericViewSet):
             return [FileUploadParser()]
 
         return super().get_parsers()
+
+    def create_multipart_upload(self, request, *args, **kwargs):
+        expires = request.headers.get('Expires', None)
+        expires_time = None
+        if expires:
+            expires_time = serializers.datetime_from_gmt(expires)
+            if expires_time is None:
+                return self.exception_response(request, exceptions.S3InvalidArgument("Expires is invalid GMT datetime"))
+
+        try:
+            bucket, obj, rados, created = self.create_object_metadata(request=request)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        s3_obj_key = obj.na
+        mu_mgr = MultipartUploadManager()
+        upload = mu_mgr.get_multipart_upload_delete_invalid(bucket=bucket, obj_path=s3_obj_key)
+        if not upload:
+            upload = mu_mgr.create_multipart_upload(bucket=bucket, obj=obj, expire_time=expires_time)
+        else:
+            upload.update_expires_time(expires_time)
+
+        data = {
+            'Bucket': bucket.name,
+            'Key': s3_obj_key,
+            'UploadId': upload.id
+        }
+        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CreateMultipartUploadOutput'))
+        return Response(data=data, status=status.HTTP_200_OK)
+

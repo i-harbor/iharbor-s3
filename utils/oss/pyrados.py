@@ -990,3 +990,10 @@ class FileWrapper:
             self.offset = 0
         else:
             self.offset = size
+
+
+class ObjectPart(HarborObject):
+    """
+    对象分段
+    """
+    pass
