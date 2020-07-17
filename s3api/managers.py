@@ -234,7 +234,7 @@ class ObjectPartManager:
             obj     # success
             None    # 不存在
 
-        :raises: Exception
+        :raises: S3Error
         """
         model = self.get_parts_model_class()
         try:
@@ -262,7 +262,7 @@ class ObjectPartManager:
             obj     # success
             None    # 不存在
 
-        :raises: Exception
+        :raises: S3Error
         """
         model = self.get_parts_model_class()
         try:

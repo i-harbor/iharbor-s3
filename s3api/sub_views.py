@@ -386,9 +386,6 @@ class ObjViewSet(CustomGenericViewSet):
         response_content_encoding = request.query_params.get('response-content-encoding', None)
         response_content_language = request.query_params.get('response-content-language', None)
 
-        if part_number is not None:
-            return self.exception_response(request, exceptions.S3InvalidPart(message=_('暂不支持参数PartNumber')))
-
         # 存储桶验证和获取桶对象
         hm = HarborManager()
         try:
@@ -405,35 +402,19 @@ class ObjViewSet(CustomGenericViewSet):
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        filesize = fileobj.si
-        filename = fileobj.name
-        # 是否是断点续传部分读取
-        ranges = request.headers.get('range')
-        if ranges:
+        if part_number is not None:
             try:
-                offset, end = self.get_object_offset_and_end(ranges, filesize=filesize)
+                part_number = int(part_number)
+                response = self.s3_get_object_part_response(bucket=bucket, obj=fileobj, part_number=part_number)
+            except ValueError:
+                return self.exception_response(request, exceptions.S3InvalidArgument(message=_('无效的参数partNumber.')))
             except exceptions.S3Error as e:
                 return self.exception_response(request, e)
-
-            generator = hm._get_obj_generator(bucket=bucket, obj=fileobj, offset=offset, end=end)
-            response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
-            response['Content-Range'] = f'bytes {offset}-{end}/{filesize}'
-            response['Content-Length'] = end - offset + 1
         else:
-            generator = hm._get_obj_generator(bucket=bucket, obj=fileobj)
-            response = FileResponse(generator)
-            response['Content-Length'] = filesize
-
-            # 增加一次下载次数
-            fileobj.download_cound_increase()
-
-        last_modified = fileobj.upt if fileobj.upt else fileobj.ult
-        filename = urlquote(filename)  # 中文文件名需要
-        response['ETag'] = fileobj.md5
-        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
-        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
-        response['Content-Type'] = 'binary/octet-stream'  # 注意格式
-        response['Content-Disposition'] = f"attachment;filename*=utf-8''{filename}"  # 注意filename 这个是下载后的名字
+            try:
+                response = self.s3_get_object_range_or_whole_response(request=request, bucket=bucket, obj=fileobj)
+            except exceptions.S3Error as e:
+                return self.exception_response(request, e)
 
         # 用户设置的参数覆盖
         if response_content_disposition:
@@ -445,6 +426,102 @@ class ObjViewSet(CustomGenericViewSet):
         if response_content_type:
             response['Content-Type'] = response_content_type
 
+        return response
+
+    def s3_get_object_part(self, bucket, obj_id: int, part_number: int):
+        """
+        获取对象一个part元数据
+
+        :return:
+            part
+            None
+
+        :raises: S3Error
+        """
+        if not (1 <= part_number <= 10000):
+            raise exceptions.S3InvalidPartNumber()
+
+        opm = ObjectPartManager(bucket=bucket)
+        part = opm.get_part_by_obj_id_part_num(obj_id=obj_id, part_num=part_number)
+        if part:
+            return part
+
+        raise exceptions.S3InvalidPartNumber()
+
+    def s3_get_object_part_response(self, bucket, obj, part_number: int):
+        """
+        读取对象一个part的响应
+
+        :return:
+            Response()
+
+        :raises: S3Error
+        """
+        part = self.s3_get_object_part(bucket=bucket, obj_id=obj.id, part_number=part_number)
+        offset = part.obj_offset
+        size = part.size
+        end = offset + size - 1
+        obj_size = obj.si
+        last_modified = obj.upt if obj.upt else obj.ult
+        filename = urlquote(obj.name)  # 中文文件名需要
+        generator = HarborManager()._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end)
+
+        response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
+        response['Content-Range'] = f'bytes {offset}-{end}/{obj_size}'
+        response['Content-Length'] = end - offset + 1
+        response['ETag'] = part.obj_etag
+        response['x-amz-mp-parts-count'] = part.parts_count
+        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
+        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
+        response['Content-Type'] = 'binary/octet-stream'  # 注意格式
+        response['Content-Disposition'] = f"attachment;filename*=utf-8''{filename}"  # 注意filename 这个是下载后的名字
+
+        return response
+
+    def s3_get_object_range_or_whole_response(self, request, bucket, obj):
+        """
+        读取对象指定范围或整个对象
+
+        :return:
+            Response()
+
+        :raises: S3Error
+        """
+        obj_size = obj.si
+        filename = obj.name
+        hm = HarborManager()
+        ranges = request.headers.get('range', None)
+        if ranges:  # 是否是断点续传部分读取
+            offset, end = self.get_object_offset_and_end(ranges, filesize=obj_size)
+
+            generator = hm._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end)
+            response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
+            response['Content-Range'] = f'bytes {offset}-{end}/{obj_size}'
+            response['Content-Length'] = end - offset + 1
+        else:
+            generator = hm._get_obj_generator(bucket=bucket, obj=obj)
+            response = FileResponse(generator)
+            response['Content-Length'] = obj_size
+
+            # 增加一次下载次数
+            obj.download_cound_increase()
+
+        # multipart object check
+        parts_qs = ObjectPartManager(bucket=bucket).get_parts_queryset_by_obj_id(obj_id=obj.id)
+        part = parts_qs.first()
+        if part:        #
+            response['ETag'] = part.obj_etag
+            response['x-amz-mp-parts-count'] = part.parts_count
+        else:
+            response['ETag'] = obj.md5
+
+        last_modified = obj.upt if obj.upt else obj.ult
+        filename = urlquote(filename)  # 中文文件名需要
+
+        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
+        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
+        response['Content-Type'] = 'binary/octet-stream'  # 注意格式
+        response['Content-Disposition'] = f"attachment;filename*=utf-8''{filename}"  # 注意filename 这个是下载后的名字
         return response
 
     def get_object_offset_and_end(self, h_range: str, filesize: int):
@@ -1031,10 +1108,11 @@ class ObjViewSet(CustomGenericViewSet):
         # 所有part rados数据组合对象rados
         md5_handler = FileMD5Handler()
         offset = 0
+        parts_count = len(complete_numbers)
         for num in complete_numbers:
             part = used_upload_parts[num]
             self.save_part_to_object(obj=obj, obj_rados=obj_rados, offset=offset, part=part,
-                                     md5_handler=md5_handler, obj_etag=obj_etag)
+                                     md5_handler=md5_handler, obj_etag=obj_etag, parts_count=parts_count)
 
             offset = offset + part.size
 
@@ -1103,15 +1181,25 @@ class ObjViewSet(CustomGenericViewSet):
 
         return True
 
-    def save_part_to_object(self, obj, obj_rados, offset, part, md5_handler, obj_etag: str):
+    def save_part_to_object(self, obj, obj_rados, offset, part, md5_handler, obj_etag: str, parts_count: int):
         """
         把一个part数据写入对象
+
+        :param obj: 对象元数据实例
+        :param obj_rados: 对象rados实例
+        :param offset: part数据写入对象的偏移量
+        :param part: part元数据实例
+        :param md5_handler: 对象md5计算
+        :param obj_etag: 对象的ETag
+        :param parts_count: 对象part总数
+        :return:
 
         :raises: S3Error
         """
         part.obj_offset = offset
         part.obj_etag = obj_etag
         part.obj_id = obj.id
+        part.parts_count = parts_count
 
         part_rados = ObjectPart(part_key=part.get_part_rados_key(), part_size=part.size)
         generator = part_rados.read_obj_generator()
@@ -1130,7 +1218,7 @@ class ObjViewSet(CustomGenericViewSet):
             offset = offset + len(data)
 
         try:
-            part.save(update_fields=['obj_offset', 'obj_etag', 'obj_id'])
+            part.save(update_fields=['obj_offset', 'obj_etag', 'obj_id', 'parts_count'])
         except Exception as e:
             raise exceptions.S3InternalError()
 

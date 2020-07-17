@@ -218,6 +218,7 @@ class ObjectPartBase(models.Model):
     part_md5 = models.CharField(verbose_name='MD5', max_length=32, default='')
     modified_time = models.DateTimeField(verbose_name='修改时间', auto_now=True)
     obj_etag = models.CharField(verbose_name='ETag', max_length=64, default='')
+    parts_count = models.IntegerField(verbose_name='对象Part总数', default=0)
 
     class Meta:
         unique_together = ['upload_id', 'part_num']

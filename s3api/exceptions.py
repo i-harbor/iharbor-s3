@@ -169,6 +169,12 @@ class S3InvalidPartOrder(S3Error):
     default_status_code = 400
 
 
+class S3InvalidPartNumber(S3Error):
+    default_message = 'The requested partNumber is not satisfiable.'
+    default_code = 'InvalidPartNumber'
+    default_status_code = 400
+
+
 class S3InvalidSecurity(S3Error):
     default_message = 'The provided security credentials are not valid.'
     default_code = 'InvalidSecurity'
