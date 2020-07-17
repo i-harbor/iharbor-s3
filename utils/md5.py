@@ -107,3 +107,29 @@ def get_str_hexMD5(s: str):
     求字符串MD5
     """
     return hashlib.md5(s.encode(encoding='utf-8')).hexdigest()
+
+
+def md5_hex_to_bytes(s: str):
+    return bytes.fromhex(s)
+
+
+def bytes_to_md5_hex(b: bytes):
+    return b.hex()
+
+
+class S3ObjectMultipartETagHandler:
+    """
+    S3对象多部分上传ETag计算
+    """
+    def __init__(self):
+        self.md5_hash = hashlib.md5()
+
+    def update(self, md5_hex: str):
+        self.md5_hash.update(md5_hex_to_bytes(md5_hex))
+
+    def __getattr__(self, item):
+        return getattr(self.md5_hash, item)
+
+    @property
+    def hex_md5(self):
+        return self.md5_hash.hexdigest()

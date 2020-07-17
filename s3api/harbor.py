@@ -6,6 +6,7 @@ from .utils import BucketFileManagement
 from utils.storagers import PathParser
 from utils.oss import HarborObject, get_size
 from . import exceptions
+from .managers import ObjectPartManager
 
 
 class HarborManager:
@@ -512,41 +513,6 @@ class HarborManager:
 
         return move_to, rename
 
-    def write_to_object(self, bucket_name: str, obj_path: str, offset: int, data, reset: bool = False, user=None):
-        """
-        向对象写入一个数据
-
-        :param bucket_name: 桶名
-        :param obj_path: 对象全路径
-        :param offset: 写入对象偏移量
-        :param data: 要写入的数据，file或bytes
-        :param reset: 为True时，先重置对象大小为0后再写入数据；
-        :param user: 用户，默认为None，如果给定用户只操作属于此用户的对象（只查找此用户的存储桶）
-        :return:
-                created             # created==True表示对象是新建的；created==False表示对象不是新建的
-                raise S3Error   # 写入失败
-        """
-        bucket, obj, created = self.create_empty_obj(bucket_name=bucket_name, obj_path=obj_path, user=user)
-        obj_key = obj.get_obj_key(bucket.id)
-        pool_name = bucket.get_pool_name()
-        rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
-        if created is False:  # 对象已存在，不是新建的
-            if reset:  # 重置对象大小
-                self._pre_reset_upload(obj=obj, rados=rados)
-
-        try:
-            if isinstance(data, bytes):
-                self._save_one_chunk(obj=obj, rados=rados, offset=offset, chunk=data)
-            else:
-                self._save_one_file(obj=obj, rados=rados, offset=offset, file=data)
-        except exceptions.S3Error as e:
-            # 如果对象是新创建的，上传失败删除对象元数据
-            if created is True:
-                obj.do_delete()
-            raise e
-
-        return created
-
     def create_empty_obj(self, bucket_name: str, obj_path: str, user):
         """
         创建一个空对象
@@ -561,22 +527,95 @@ class HarborManager:
 
         :raise S3Error
         """
-        pp = PathParser(filepath=obj_path)
-        path, filename = pp.get_path_and_filename()
-        if not bucket_name or not filename:
-            raise exceptions.S3InvalidRequest('参数有误')
-
-        if len(filename) > 255:
-            raise exceptions.S3InvalidRequest('对象名称长度最大为255字符')
-
         # 存储桶验证和获取桶对象
         bucket = self.get_bucket(bucket_name, user=user)
         if not bucket:
             raise exceptions.S3NoSuchBucket('存储桶不存在')
 
         collection_name = bucket.get_bucket_table_name()
-        obj, created = self._get_or_create_path_obj(collection_name, path, filename)
+        obj, created = self.get_or_create_obj(collection_name, obj_path)
         return bucket, obj, created
+
+    def get_or_create_obj(self, table_name: str, obj_path_name: str):
+        """
+        获取或创建空对象
+
+        :param table_name: bucket的对象元数据table
+        :param obj_path_name: 对象全路径
+        :return:
+            (obj, False) # 对象已存在
+            (obj, True)  # 对象不存在，新创建的对象
+
+        :raise S3Error
+        """
+        pp = PathParser(filepath=obj_path_name)
+        path, filename = pp.get_path_and_filename()
+        if len(filename) > 255:
+            raise exceptions.S3InvalidRequest('对象名称长度最大为255字符')
+
+        obj, created = self._get_or_create_path_obj(table_name, path, filename)
+        return obj, created
+
+    def ensure_path_and_no_same_name_dir(self, table_name: str, obj_path_name: str):
+        """
+        确保对象父路径存在（不存在创建）并且没有同名的目录存在，确保满足创建整个对象路径的条件
+
+        :param table_name: bucket的对象元数据table
+        :param obj_path_name: 对象全路径
+        :return:
+            True
+            False
+
+        :raise S3Error
+        """
+        pp = PathParser(filepath=obj_path_name)
+        path, filename = pp.get_path_and_filename()
+        if len(filename) > 255:
+            raise exceptions.S3InvalidRequest('对象名称长度最大为255字符')
+
+        self.create_path_get_obj(table_name=table_name, path=path, filename=filename)
+        return True
+
+    def create_path_get_obj(self, table_name, path, filename):
+        """
+        路径不存在则创建路径，获取对象元数据
+
+        :param table_name: 桶对应的数据库表名
+        :param path: 文件对象所在的父路径
+        :param filename: 文件对象名称
+        :return:
+                obj, did            # 已存在, did是path节点id
+                None, did           # 不存在, did是path节点id
+                raise S3Error       # 已存在同名目录
+
+        :raise S3Error
+        """
+        did = None
+        # 有路径，创建整个路径
+        if path:
+            dirs = self.create_path(table_name=table_name, path=path)
+            base_dir = dirs[-1]
+            did = base_dir.id
+
+        bfm = BucketFileManagement(path=path, collection_name=table_name)
+        try:
+            obj = bfm.get_dir_or_obj_exists(name=filename, cur_dir_id=did)
+        except Exception as e:
+            raise exceptions.S3InternalError(f'查询对象错误，{str(e)}')
+
+        if obj is None:
+            if not did:
+                _, did = bfm.get_cur_dir_id()
+
+            return None, did
+
+        # 文件对象已存在
+        if obj.is_file():
+            return obj, obj.did
+
+        # 已存在同名的目录
+        if obj.is_dir():
+            raise exceptions.S3InvalidRequest('指定的对象名称与已有的目录重名，请重新指定一个名称')
 
     def _get_or_create_path_obj(self, table_name, path, filename):
         """
@@ -591,51 +630,31 @@ class HarborManager:
 
         :raise S3Error
         """
-        did = None
-
-        # 有路径，创建整个路径
-        if path:
-            dirs = self.create_path(table_name=table_name, path=path)
-            base_dir = dirs[-1]
-            did = base_dir.id
-
-        bfm = BucketFileManagement(path=path, collection_name=table_name)
-        try:
-            obj = bfm.get_dir_or_obj_exists(name=filename, cur_dir_id=did)
-        except Exception as e:
-            raise exceptions.S3InternalError(f'查询对象错误，{str(e)}')
-
-        # 文件对象已存在
-        if obj and obj.is_file():
+        obj, did = self.create_path_get_obj(table_name=table_name, path=path, filename=filename)
+        if obj:
             return obj, False
 
-        # 已存在同名的目录
-        if obj and obj.is_dir():
-            raise exceptions.S3InvalidRequest('指定的对象名称与已有的目录重名，请重新指定一个名称')
-
-        if not did:
-            _, did = bfm.get_cur_dir_id()
-
         # 创建文件对象
-        BucketFileClass = bfm.get_obj_model_class()
+        bfm = BucketFileManagement(path=path, collection_name=table_name)
+        obj_model_class = bfm.get_obj_model_class()
         full_filename = bfm.build_dir_full_name(filename)
-        bfinfo = BucketFileClass(na=full_filename,  # 全路径文件名
-                                 name=filename,     # 文件名
-                                 fod=True,          # 文件
-                                 did=did,           # 父节点id
-                                 si=0, upt=timezone.now())  # 文件大小
+        obj = obj_model_class(na=full_filename,  # 全路径文件名
+                              name=filename,     # 文件名
+                              fod=True,          # 文件
+                              did=did,           # 父节点id
+                              si=0, upt=timezone.now())  # 文件大小
         try:
-            bfinfo.save()
-            obj = bfinfo
+            obj.save()
         except Exception as e:
             raise exceptions.S3InternalError('新建对象元数据失败')
 
         return obj, True
 
-    def _pre_reset_upload(self, obj, rados):
+    def _pre_reset_upload(self, parts_table_name: str, obj, rados):
         """
         覆盖上传前的一些操作
 
+        :param parts_table_name: 对象part元数据数据库表名
         :param obj: 文件对象元数据
         :param rados: rados接口类对象
         :return:
@@ -651,6 +670,16 @@ class HarborManager:
         obj.si = 0
         if not obj.do_save(update_fields=['ult', 'si']):
             raise exceptions.S3InternalError('修改对象元数据失败')
+
+        # 可能是多部分上传对象，删除part元数据
+        try:
+            ObjectPartManager(parts_table_name=parts_table_name).remove_object_parts(obj_id=obj.id)
+        except Exception as e:
+            # 恢复元数据
+            obj.ult = old_ult
+            obj.si = old_size
+            obj.do_save(update_fields=['ult', 'si'])
+            raise exceptions.S3InternalError('删除对象part元数据失败')
 
         ok, _ = rados.delete()
         if not ok:
@@ -683,43 +712,6 @@ class HarborManager:
         # 存储文件块
         try:
             ok, msg = rados.write(offset=offset, data_block=chunk)
-        except Exception as e:
-            ok = False
-            msg = str(e)
-
-        if not ok:
-            # 手动回滚对象元数据
-            self._update_obj_metadata(obj, obj.si, obj.upt)
-            raise exceptions.S3InternalError('文件块rados写入失败:' + msg)
-
-        return True
-
-    def _save_one_file(self, obj, rados, offset: int, file):
-        """
-        向对象写入一个文件
-
-        :param obj: 对象元数据
-        :param rados: rados接口
-        :param offset: 分片偏移量
-        :param file: 文件
-        :return:
-            成功：True
-            失败：raise S3Error
-        """
-        # 先更新元数据，后写rados数据
-        # 更新文件修改时间和对象大小
-        try:
-            file_size = get_size(file)
-        except AttributeError:
-            raise exceptions.S3InvalidRequest('输入必须是一个文件')
-
-        new_size = offset + file_size   # 分片数据写入后 对象偏移量大小
-        if not self._update_obj_metadata(obj, size=new_size):
-            raise exceptions.S3InternalError('修改对象元数据失败')
-
-        # 存储文件
-        try:
-            ok, msg = rados.write_file(offset=offset, file=file)
         except Exception as e:
             ok = False
             msg = str(e)
@@ -788,6 +780,8 @@ class HarborManager:
         # 先删除元数据，后删除rados对象（删除失败恢复元数据）
         if not fileobj.do_delete():
             raise exceptions.S3InternalError('删除对象原数据时错误')
+
+        ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
 
         pool_name = bucket.get_pool_name()
         ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=fileobj.si)
@@ -930,20 +924,21 @@ class HarborManager:
         obj_key = obj.get_obj_key(bucket.id)
         pool_name = bucket.get_pool_name()
 
-        def generator():
-            ok = True
-            rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
-            if created is False:  # 对象已存在，不是新建的,重置对象大小
-                self._pre_reset_upload(obj=obj, rados=rados)
+        return self.__write_generator(bucket=bucket, pool_name=pool_name, obj_rados_key=obj_key, obj=obj, created=created)
 
-            while True:
-                offset, data = yield ok
-                try:
-                    ok = self._save_one_chunk(obj=obj, rados=rados, offset=offset, chunk=data)
-                except exceptions.S3Error:
-                    ok = False
+    def __write_generator(self, bucket, pool_name, obj_rados_key, obj, created):
+        ok = True
+        table_name = bucket.get_parts_table_name()
+        rados = HarborObject(pool_name=pool_name, obj_id=obj_rados_key, obj_size=obj.si)
+        if created is False:  # 对象已存在，不是新建的,重置对象大小
+            self._pre_reset_upload(parts_table_name=table_name, obj=obj, rados=rados)
 
-        return generator()
+        while True:
+            offset, data = yield ok
+            try:
+                ok = self._save_one_chunk(obj=obj, rados=rados, offset=offset, chunk=data)
+            except exceptions.S3Error:
+                ok = False
 
     @staticmethod
     def check_public_or_user_bucket(bucket, user, all_public):

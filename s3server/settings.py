@@ -47,6 +47,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'utils.middleware.ServerHeaderMiddleware',
     'django_hosts.middleware.HostsRequestMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -230,6 +231,7 @@ CEPH_RADOS = {
     'CONF_FILE_PATH': '/etc/ceph/ceph.conf',
     'KEYRING_FILE_PATH': '/etc/ceph/ceph.client.obs.keyring',
     'POOL_NAME': ('xxx',),
+    'MULTIPART_POOL_NAME': 'obs_test',
 }
 
 DATABASE_ROUTERS = [
@@ -252,7 +254,7 @@ REST_FRAMEWORK = {
         # 'rest_framework.authentication.BasicAuthentication'
     ],
     'DEFAULT_PARSER_CLASSES': [
-        'rest_framework_xml.parsers.XMLParser',     # 支持解析application/json方式的json数据
+        's3api.parsers.S3XMLParser',
         'rest_framework.parsers.FormParser',        # 支持解析application/x-www-form-urlencoded方式的form表单数据，request.data将填充一个QueryDict
         'rest_framework.parsers.MultiPartParser'    # 支持解析multipart/form-data方式多部分HTML表单内容，支持文件上载，request.data将填充一个QueryDict
     ],
@@ -265,5 +267,8 @@ REST_FRAMEWORK = {
 
     'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',
 }
+
+S3_MULTIPART_UPLOAD_MAX_SIZE = 2 * 1024 ** 3        # 2GB
+S3_MULTIPART_UPLOAD_MIN_SIZE = 5 * 1024 ** 2        # 5MB
 
 from .security import *

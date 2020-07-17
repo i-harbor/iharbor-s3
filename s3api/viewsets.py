@@ -107,6 +107,7 @@ class CustomGenericViewSet(GenericViewSet):
         :raises: S3KeyTooLongError
         """
         s3_key = request.path
+        s3_key = s3_key.lstrip('/')
         if len(s3_key) > 1024:
             raise exceptions.S3KeyTooLongError()
 

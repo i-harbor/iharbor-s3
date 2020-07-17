@@ -4,7 +4,7 @@ from django.core.files.uploadedfile import UploadedFile
 from django.core.exceptions import RequestDataTooBig
 from django.utils.translation import gettext
 
-from utils.oss.pyrados import HarborObject, FileWrapper, RadosError
+from utils.oss.pyrados import HarborObject, FileWrapper, RadosError, ObjectPart
 from utils.md5 import FileMD5Handler
 
 
@@ -110,12 +110,16 @@ class CephUploadFile(UploadedFile):
         self.file.seek(0)
         return self
 
+    def delete(self):
+        self.file.delete()
+
 
 class FileUploadToCephHandler(FileUploadHandler):
     """
     直接存储到ceph的自定义文件上传处理器
     """
     chunk_size = 5 * 2 ** 20    # 5MB
+    max_size_upload_limit = None
 
     def __init__(self, request=None, pool_name='', obj_key=''):
         super().__init__(request=request)
@@ -124,17 +128,23 @@ class FileUploadToCephHandler(FileUploadHandler):
         self.file = None
         self.file_md5_handler = None
 
+    def get_max_size_upload_limit(self):
+        if self.max_size_upload_limit:
+            return self.max_size_upload_limit
+
+        return getattr(settings, 'CUSTOM_UPLOAD_MAX_FILE_SIZE', 5 * 2 ** 30)  # default 5GB
+
     def handle_raw_input(self, input_data, META, content_length, boundary, encoding=None):
         """
         Handle the raw input from the client.
         """
-        max_size = getattr(settings, 'CUSTOM_UPLOAD_MAX_FILE_SIZE', 5 * 2 ** 30)    # default 5GB
+        max_size = self.get_max_size_upload_limit()
         if max_size is None:
             return
         if content_length > max_size:
             raise RequestDataTooBig(gettext('上传文件超过大小限制'))
         if content_length <= 0:
-            raise
+            raise Exception(gettext('无效的标头Content-Length'))
 
     def new_file(self, *args, **kwargs):
         """
@@ -173,4 +183,25 @@ class FileUploadToCephHandler(FileUploadHandler):
             return fmh.hex_md5
 
         return ''
+
+
+class PartUploadToCephHandler(FileUploadToCephHandler):
+    """
+    multipart upload直接存储到ceph上传处理器
+    """
+    chunk_size = 5 * 2 ** 20    # 5MB
+    max_size_upload_limit = 2 * 1024 ** 3       # 2GB
+
+    def __init__(self, request=None, pool_name='', part_key=''):
+        self.part_key = part_key
+        super().__init__(request=request, pool_name=pool_name, obj_key=part_key)
+
+    def new_file(self, *args, **kwargs):
+        """
+        Create the file object to append to as data is coming in.
+        """
+        super().new_file(*args, **kwargs)
+        self.file = FileWrapper(ObjectPart(pool_name=self.pool_name, part_key=self.part_key))
+        self.file_md5_handler = FileMD5Handler()
+
 

@@ -58,6 +58,12 @@ class S3NoSuchBucket(S3NotFound):
     default_code = 'NoSuchBucket'
 
 
+class S3NoSuchUpload(S3NotFound):
+    default_message = "The specified multipart upload does not exist. " \
+                      "The upload ID might be invalid, or the multipart upload might have been aborted or completed."
+    default_code = 'NoSuchUpload'
+
+
 class S3MethodNotAllowed(S3Error):
     default_message = 'The specified method is not allowed against this resource.'
     default_code = 'MethodNotAllowed'
@@ -140,6 +146,12 @@ class S3EntityTooLarge(S3Error):
 class S3InvalidDigest(S3Error):
     default_message = 'The Content-MD5 you specified is not valid.'
     default_code = 'InvalidDigest'
+    default_status_code = 400
+
+
+class S3BadDigest(S3Error):
+    default_message = 'The Content-MD5 you specified did not match what we received.'
+    default_code = 'BadDigest'
     default_status_code = 400
 
 
@@ -234,3 +246,15 @@ class S3UnsupportedMediaType(S3Error):
     default_message = "Unsupported Media Type."
     default_code = 'UnsupportedMediaType'
     default_status_code = 415
+
+
+class S3MalformedXML(S3Error):
+    default_message = "The XML you provided was not well-formed or did not validate against our published schema."
+    default_code = 'MalformedXML'
+    default_status_code = 400
+
+
+class S3CompleteMultipartAlreadyInProgress(S3Error):
+    default_message = 'Complete multipart upload is already in progress.'
+    default_code = 'CompleteMultipartAlreadyInProgress'
+    default_status_code = 409

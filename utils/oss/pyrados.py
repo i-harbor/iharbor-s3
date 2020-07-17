@@ -991,9 +991,22 @@ class FileWrapper:
         else:
             self.offset = size
 
+    def delete(self):
+        self._ho.delete()
+
 
 class ObjectPart(HarborObject):
     """
     对象分段
     """
-    pass
+    def __init__(self, part_key: str, part_size: int = 0, pool_name: str = ''):
+        pool_name = pool_name if pool_name else settings.CEPH_RADOS.get('MULTIPART_POOL_NAME', '')
+        if not pool_name:
+            raise RadosError('No config "MULTIPART_POOL_NAME" for "CEPH_RADOS" in file "settings"')
+
+        super().__init__(pool_name=pool_name, obj_id=part_key, obj_size=part_size)
+
+    def reset_part_key_and_size(self, part_key=None, part_size=None):
+        super().reset_obj_id_and_size(obj_id=part_key, obj_size=part_size)
+
+
