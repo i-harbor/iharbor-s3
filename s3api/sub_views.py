@@ -364,7 +364,12 @@ class ObjViewSet(CustomGenericViewSet):
         """
         delete object
         delete dir
+        AbortMultipartUpload
         """
+        upload_id = request.query_params.get('uploadId', None)
+        if upload_id is not None:
+            return self.abort_multipart_upload(request=request, upload_id=upload_id)
+
         key = self.get_s3_obj_key(request)
         if key.endswith('/'):
             return self.delete_dir(request=request, args=args, kwargs=kwargs)
@@ -748,12 +753,8 @@ class ObjViewSet(CustomGenericViewSet):
 
         obj_perms_code = acl_choices[x_amz_acl]
         if upload:
-            if not upload.is_completed():       # 存在已完成的上传任务记录，删除
-                try:
-                    upload.delete()
-                except Exception as e:
-                    pass
-
+            if upload.is_completed():       # 存在已完成的上传任务记录，删除
+                upload.safr_delete()
                 upload = None
             else:
                 mu_mgr.update_upload_belong_to_object(upload=upload, bucket=bucket, obj_key=obj_path_name,
@@ -974,11 +975,7 @@ class ObjViewSet(CustomGenericViewSet):
             return self.exception_response(request, e)
 
         if upload.is_completed():          # 已完成的上传任务，删除任务记录
-            try:
-                upload.delete()
-            except Exception as e:
-                pass
-
+            upload.safe_delete()
             return self.exception_response(request, exceptions.S3NoSuchUpload())
 
         if upload.is_composing():             # 已经正在组合对象，不能重复组合
@@ -1051,10 +1048,9 @@ class ObjViewSet(CustomGenericViewSet):
         self.clear_parts_cache(used_upload_parts, is_rm_metadata=False)     # 删除已组合的rados数据, 保留part元数据
 
         # 删除多部分上传upload任务
-        try:
-            upload.delete()
-        except Exception as e:
-            upload.set_completed()      # 删除失败，尝试标记已上传完成
+        if not upload.safe_delete():
+            if not upload.safe_delete():
+                upload.set_completed()      # 删除失败，尝试标记已上传完成
 
         return obj, obj_etag
 
@@ -1065,24 +1061,29 @@ class ObjViewSet(CustomGenericViewSet):
         :param parts: part元数据实例list或dict
         :param is_rm_metadata: True(删除元数据)；False(不删元数据)
         :return:
-            True
-            False
+            True, []
+            False, [part]      # 第二个返回值是删除失败的part元数据list
         """
         if isinstance(parts, dict):
             parts = parts.values()
 
+        remove_failed_parts = []        # 删除元数据失败的part
         part_rados = ObjectPart(part_key='', part_size=0)
         for p in parts:
             if is_rm_metadata:
                 if not p.safe_delete():
-                    p.safe_delete()     # 重试一次
+                    if not p.safe_delete():     # 重试一次
+                        remove_failed_parts.append(p)
 
             part_rados.reset_part_key_and_size(part_key=p.get_part_rados_key(), part_size=p.size)
             ok, _ = part_rados.delete()
             if not ok:
                 part_rados.delete()     # 重试一次
 
-        return True
+        if remove_failed_parts:
+            return False, remove_failed_parts
+
+        return True, []
 
     def update_obj_metedata(self, obj, size, hex_md5: str, share_code):
         """
@@ -1177,5 +1178,41 @@ class ObjViewSet(CustomGenericViewSet):
         obj_etag = f'"{obj_etag_handler.hex_md5}-{obj_parts_count}"'
         return used_upload_parts, unused_upload_parts, obj_etag
 
+    def abort_multipart_upload(self, request, upload_id: str):
+        bucket_name = self.get_bucket_name(request)
 
+        if len(upload_id) < 64:
+            return self.exception_response(request, exceptions.S3NoSuchUpload())
 
+        try:
+            upload, bucket = self.get_upload_and_bucket(request=request, upload_id=upload_id, bucket_name=bucket_name)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if upload.is_composing():             # 已经正在组合对象
+            return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
+
+        if upload.is_completed():          # 已完成的上传任务，删除任务记录
+            upload.safe_delete()
+
+            return self.exception_response(request, exceptions.S3NoSuchUpload())
+
+        opm = ObjectPartManager(bucket=bucket)
+        upload_parts_qs = opm.get_parts_queryset_by_upload_id_obj_id(upload_id=upload.id, obj_id=0)
+        upload_parts = list(upload_parts_qs)
+        ok, failed_parts = self.clear_parts_cache(parts=upload_parts, is_rm_metadata=True)
+        if not ok:
+            all_len = len(upload_parts)
+            failed_len = len(failed_parts)
+            if failed_len > (all_len // 2):      # 如果大多数part删除失败，就直接返回500内部错误，让客户端重新请求
+                return self.exception_response(request, exceptions.S3InternalError())
+
+            # 小部分删除失败，重试清除删除失败的part
+            ok, failed_parts = self.clear_parts_cache(parts=failed_parts, is_rm_metadata=True)
+            if not ok:
+                return self.exception_response(request, exceptions.S3InternalError())
+
+        if upload.safe_delete():
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        return self.exception_response(request, exceptions.S3InternalError())

@@ -61,9 +61,10 @@ class MultipartUpload(models.Model):
             if update_fields:
                 update_fields.append('id')
 
-        if not self.key_md5:
-            self.reset_key_md5()
-            if update_fields:
+        old_key_md5 = self.key_md5
+        self.reset_key_md5()                # 每次更新，都确保key_md5和obj_key同步变更
+        if self.key_md5 != old_key_md5:
+            if update_fields and ('key_md5' not in update_fields):
                 update_fields.append('key_md5')
 
         super().save(force_insert=force_insert, force_update=force_update, using=using, update_fields=update_fields)
@@ -183,6 +184,19 @@ class MultipartUpload(models.Model):
                 self.save(update_fields=['status'])
             except Exception as e:
                 return False
+
+        return True
+
+    def safe_delete(self):
+        """
+        :return:
+            True
+            False
+        """
+        try:
+            self.delete()
+        except Exception as e:
+            return False
 
         return True
 
