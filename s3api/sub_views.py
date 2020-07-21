@@ -216,7 +216,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, e)
 
         if obj is None:
-            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter, bucket=bucket)
 
         paginator = paginations.ListObjectsV2CursorPagination(context={'bucket': bucket})
         max_keys = paginator.get_page_size(request=request)
@@ -230,7 +230,7 @@ class BucketViewSet(CustomGenericViewSet):
 
         if prefix == '' or prefix.endswith('/'):  # list dir
             if not obj.is_dir():
-                return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+                return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter, bucket=bucket)
 
             objs_qs = hm.list_dir_queryset(bucket=bucket, dir_obj=obj)
             paginator.paginate_queryset(objs_qs, request=request)
@@ -249,7 +249,7 @@ class BucketViewSet(CustomGenericViewSet):
 
         # list object metadata
         if not obj.is_file():
-            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter)
+            return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter, bucket=bucket)
 
         if fetch_owner == 'true':
             serializer = serializers.ObjectListWithOwnerSerializer(obj, context={'user': request.user})
@@ -290,9 +290,15 @@ class BucketViewSet(CustomGenericViewSet):
         self.set_renderer(request, renders.ListObjectsV2XMLRenderer())
         return Response(data=data, status=status.HTTP_200_OK)
 
-    def list_objects_v2_no_match(self, request, prefix, delimiter):
-        bucket_name = self.get_bucket_name(request)
-        paginator = paginations.ListObjectsV2CursorPagination()
+    def list_objects_v2_no_match(self, request, prefix, delimiter, bucket=None):
+        if bucket:
+            bucket_name = bucket.name
+            context = {'bucket': bucket}
+        else:
+            bucket_name = self.get_bucket_name(request)
+            context = {'bucket_name': bucket_name}
+
+        paginator = paginations.ListObjectsV2CursorPagination(context=context)
         max_keys = paginator.get_page_size(request=request)
         ret_data = {
             'IsTruncated': 'false',     # can not use True
