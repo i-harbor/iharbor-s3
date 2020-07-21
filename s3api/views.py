@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
-from .renders import CusXMLRenderer
+from .renders import CusXMLRenderer, CommonXMLRenderer
 from .viewsets import CustomGenericViewSet
 from buckets.models import Bucket
 from .serializers import BucketListSerializer

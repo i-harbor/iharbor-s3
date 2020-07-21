@@ -34,6 +34,7 @@ CEPH_RADOS = {
     'CONF_FILE_PATH': '/etc/ceph/ceph.conf',
     'KEYRING_FILE_PATH': '/etc/ceph/ceph.client.admin.keyring',
     'POOL_NAME': ('poolname1', 'poolname1'),
+    'MULTIPART_POOL_NAME': 'poolname1'
 }
 ```
 

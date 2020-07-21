@@ -191,7 +191,7 @@ class BucketViewSet(CustomGenericViewSet):
             delete_table_for_model_class(model=model_class)
             return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶parts表错误')))
 
-        return Response(status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_200_OK, headers={'Location': '/' + bucket_name})
 
     def list_objects_v2(self, request, *args, **kwargs):
         delimiter = request.query_params.get('delimiter', None)
@@ -425,6 +425,8 @@ class ObjViewSet(CustomGenericViewSet):
             response['Content-Language'] = response_content_language
         if response_content_type:
             response['Content-Type'] = response_content_type
+
+        response['x-amz-storage-class'] = 'STANDARD'
 
         return response
 

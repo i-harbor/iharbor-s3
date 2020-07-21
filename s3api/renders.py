@@ -89,4 +89,55 @@ class NoRootListXMLRenderer(BaseRenderer):
             xml.characters(force_str(data))
 
 
+class CommonXMLRenderer(BaseRenderer):
+    """
+    列表项的渲染方式: key as xml item_tag_name,
 
+    {a: [1, 2]}:
+        <a>1</a>
+        <a>2</a>
+    """
+    def __init__(self, root_tag_name: str = 'root'):
+        self.root_tag_name = root_tag_name
+        self.item_tag_name = 'item_tag_name'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """
+        Renders `data` into serialized XML.
+        """
+        if data is None:
+            return ""
+
+        stream = StringIO()
+
+        xml = SimplerXMLGenerator(stream, self.charset)
+        xml.startDocument()
+
+        self._to_xml(xml, data)
+
+        xml.endDocument()
+        return stream.getvalue()
+
+    def _to_xml(self, xml, data):
+        if isinstance(data, (list, tuple)):
+            for item in data:
+                xml.startElement(self.item_tag_name, {})
+                self._to_xml(xml, item)
+                xml.endElement(self.item_tag_name)
+
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, (list, tuple)):
+                    self.item_tag_name = key
+                    self._to_xml(xml, value)
+                else:
+                    xml.startElement(key, {})
+                    self._to_xml(xml, value)
+                    xml.endElement(key)
+
+        elif data is None:
+            # Don't output any value
+            pass
+
+        else:
+            xml.characters(force_str(data))

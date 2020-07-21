@@ -177,7 +177,7 @@ LOGGING = {
         'file': {
             'level': 'WARNING',
             'class': 'concurrent_log_handler.ConcurrentRotatingFileHandler',
-            'filename': os.path.join(LOGGING_FILES_DIR, 'webserver.log'),
+            'filename': os.path.join(LOGGING_FILES_DIR, 'iharbor-s3.log'),
             'formatter': 'verbose',
             'maxBytes': 1024*1024*200,  # 200MB
             'backupCount': 10           # 最多10个文件
@@ -194,7 +194,7 @@ LOGGING = {
             'level': 'DEBUG',
             'filters': ['require_debug_false'],     # working with debug mode
             'class': 'concurrent_log_handler.ConcurrentRotatingFileHandler',
-            'filename': os.path.join(LOGGING_FILES_DIR, 'debug.log'),
+            'filename': os.path.join(LOGGING_FILES_DIR, 's3-debug.log'),
             'formatter': 'dubug_formatter',
             'maxBytes': 1024*1024*200,  # 200MB
             'backupCount': 10           # 最多10个文件

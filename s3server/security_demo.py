@@ -44,14 +44,6 @@ DATABASES = {
 # Ceph rados settings
 CEPH_RADOS['POOL_NAME'] = ('obs_test',)
 
-# 邮箱配置
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_USE_TLS = True    #是否使用TLS安全传输协议
-# EMAIL_PORT = 25
-EMAIL_HOST = 'xxx'
-EMAIL_HOST_USER = 'xxx'
-EMAIL_HOST_PASSWORD = 'xxx'
-
 
 # 允许所有主机执行跨站点请求
 CORS_ORIGIN_ALLOW_ALL = True
