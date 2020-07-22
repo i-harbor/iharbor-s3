@@ -146,7 +146,7 @@ AUTH_USER_MODEL = 'users.UserProfile'
 APPEND_SLASH = False
 
 # 日志配置
-LOGGING_FILES_DIR = '/var/log/evharbor'
+LOGGING_FILES_DIR = '/var/log/iharbor'
 if not os.path.exists(LOGGING_FILES_DIR):
     os.makedirs(LOGGING_FILES_DIR, exist_ok=True)
 

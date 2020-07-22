@@ -55,13 +55,13 @@ class S3V4Authentication(BaseAuthentication):
             return None
 
         if len(auth) == 1:
-            msg = _('Invalid auth header. No credentials provided.')
+            msg = _('Invalid authorization header. No credentials provided.')
             raise exceptions.S3AuthorizationHeaderMalformed(msg)
 
         try:
             auth_key_str = auth[1].decode()
         except UnicodeError:
-            msg = _('Invalid auth header. Auth string should not contain invalid characters.')
+            msg = _('Invalid authorization header. Auth string should not contain invalid characters.')
             raise exceptions.S3AuthorizationHeaderMalformed(msg)
 
         self.s3_timestamp = self.get_timestamp_from_header(request)
@@ -71,7 +71,7 @@ class S3V4Authentication(BaseAuthentication):
         """
         :return:
             None
-            {'Credential': x, 'SignedHeaders': x, 'Signature': x, 'Expires': x}
+            {'Credential': x, 'SignedHeaders': x, 'Signature': x}
         """
         algorithm = request.query_params.get('X-Amz-Algorithm', None)
         if algorithm is None:
@@ -82,12 +82,27 @@ class S3V4Authentication(BaseAuthentication):
 
         self.s3_timestamp = self.get_timestamp_from_query(request)
 
+        # 检查认证凭据是否过期, 最长七天
+        expires = int(request.query_params.get('X-Amz-Expires', 86400))  # 86400(24h), 最大604800(7days)
+        if not (1 <= expires <= 86400):
+            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of param "Expires".')
+
+        now_tsp = datetime.utcnow().timestamp()
+        expires_tsp = self.s3_datetime.timestamp() + expires
+        if expires_tsp < now_tsp:
+            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='expires')
+
         return {
             'Credential': request.query_params.get('X-Amz-Credential', ''),
             'SignedHeaders': request.query_params.get('X-Amz-SignedHeaders', ''),
-            'Signature': request.query_params.get('X-Amz-Signature', ''),
-            'Expires': int(request.query_params.get('X-Amz-Expires', )),    # 86400(24h), 最大604800(7days)
+            'Signature': request.query_params.get('X-Amz-Signature', '')
         }
+
+    def check_expires(self, ):
+        """
+        检查认证凭据是否过期
+        :return:
+        """
 
     def authenticate_credentials(self, request, credentials):
         credential = credentials.get('Credential')
