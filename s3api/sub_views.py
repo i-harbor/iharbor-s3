@@ -319,7 +319,7 @@ class BucketViewSet(CustomGenericViewSet):
 
 
 class ObjViewSet(CustomGenericViewSet):
-    http_method_names = ['get', 'post', 'put', 'delete', 'options']
+    http_method_names = ['get', 'post', 'put', 'delete', 'head', 'options']
     renderer_classes = [renders.CusXMLRenderer]
     content_negotiation_class = CusContentNegotiation
     parser_classes = [parsers.S3XMLParser]
@@ -382,11 +382,21 @@ class ObjViewSet(CustomGenericViewSet):
 
         return self.delete_object(request=request, args=args, kwargs=kwargs)
 
+    def head(self, request, *args, **kwargs):
+        """
+        head bucket
+        """
+        return self.head_object(request=request, args=args, kwargs=kwargs)
+
     def s3_get_object(self, request, args, kwargs):
         bucket_name = self.get_bucket_name(request)
         obj_path_name = self.get_obj_path_name(request)
 
         part_number = request.query_params.get('partNumber', None)
+        header_range = request.headers.get('range', None)
+        if part_number is not None and header_range is not None:
+            return self.exception_response(request, exceptions.S3InvalidRequest())
+
         response_content_disposition = request.query_params.get('response-content-disposition', None)
         response_content_type = request.query_params.get('response-content-type', None)
         response_content_encoding = request.query_params.get('response-content-encoding', None)
@@ -436,13 +446,13 @@ class ObjViewSet(CustomGenericViewSet):
 
         return response
 
-    def s3_get_object_part(self, bucket, obj_id: int, part_number: int):
+    def get_object_part(self, bucket, obj_id: int, part_number: int):
         """
         获取对象一个part元数据
 
         :return:
             part
-            None
+            None    # part_number == 1时，非多部分对象
 
         :raises: S3Error
         """
@@ -453,6 +463,9 @@ class ObjViewSet(CustomGenericViewSet):
         part = opm.get_part_by_obj_id_part_num(obj_id=obj_id, part_num=part_number)
         if part:
             return part
+
+        if part_number == 1:
+            return None
 
         raise exceptions.S3InvalidPartNumber()
 
@@ -465,20 +478,29 @@ class ObjViewSet(CustomGenericViewSet):
 
         :raises: S3Error
         """
-        part = self.s3_get_object_part(bucket=bucket, obj_id=obj.id, part_number=part_number)
-        offset = part.obj_offset
-        size = part.size
-        end = offset + size - 1
         obj_size = obj.si
+        part = self.get_object_part(bucket=bucket, obj_id=obj.id, part_number=part_number)
+        if part:
+            offset = part.obj_offset
+            size = part.size
+            end = offset + size - 1
+            generator = HarborManager()._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end)
+            response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
+            response['Content-Length'] = end - offset + 1
+            response['ETag'] = part.obj_etag
+            response['x-amz-mp-parts-count'] = part.parts_count
+            response['Content-Range'] = f'bytes {offset}-{end}/{obj_size}'
+        else:   # 非多部分对象
+            generator = HarborManager()._get_obj_generator(bucket=bucket, obj=obj)
+            response = FileResponse(generator)
+            response['Content-Length'] = obj_size
+            response['ETag'] = obj.md5
+            if obj_size > 0:
+                end = max(obj_size - 1, 0)
+                response['Content-Range'] = f'bytes {0}-{end}/{obj_size}'
+
         last_modified = obj.upt if obj.upt else obj.ult
         filename = urlquote(obj.name)  # 中文文件名需要
-        generator = HarborManager()._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end)
-
-        response = FileResponse(generator, status=status.HTTP_206_PARTIAL_CONTENT)
-        response['Content-Range'] = f'bytes {offset}-{end}/{obj_size}'
-        response['Content-Length'] = end - offset + 1
-        response['ETag'] = part.obj_etag
-        response['x-amz-mp-parts-count'] = part.parts_count
         response['Last-Modified'] = serializers.time_to_gmt(last_modified)
         response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
         response['Content-Type'] = 'binary/octet-stream'  # 注意格式
@@ -499,7 +521,7 @@ class ObjViewSet(CustomGenericViewSet):
         filename = obj.name
         hm = HarborManager()
         ranges = request.headers.get('range', None)
-        if ranges:  # 是否是断点续传部分读取
+        if ranges is not None:  # 是否是断点续传部分读取
             offset, end = self.get_object_offset_and_end(ranges, filesize=obj_size)
 
             generator = hm._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end)
@@ -1312,3 +1334,143 @@ class ObjViewSet(CustomGenericViewSet):
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         return self.exception_response(request, exceptions.S3InternalError())
+
+    def head_object(self, request, *args, **kwargs):
+        bucket_name = self.get_bucket_name(request)
+        obj_path_name = self.get_obj_path_name(request)
+        part_number = request.query_params.get('partNumber', None)
+        ranges = request.headers.get('range', None)
+
+        if ranges is not None and part_number is not None:
+            return self.exception_response(request, exceptions.S3InvalidRequest())
+
+        # 存储桶验证和获取桶对象
+        hm = HarborManager()
+        try:
+            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if fileobj is None:
+            # 存储桶是否是公有权限
+            if bucket.is_public_permission():
+                return self.exception_response(request, exceptions.S3NoSuchKey())
+
+            # 存储桶是否属于当前用户
+            if bucket.check_user_own_bucket(request.user):
+                return self.exception_response(request, exceptions.S3NoSuchKey())
+
+            return self.exception_response(request, exceptions.S3AccessDenied())
+
+        # 是否有文件对象的访问权限
+        try:
+            self.has_object_access_permission(request=request, bucket=bucket, obj=fileobj)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if part_number is not None or ranges is not None:
+            if part_number:
+                try:
+                    part_number = int(part_number)
+                except ValueError:
+                    return self.exception_response(request, exceptions.S3InvalidArgument(message=_('无效的参数partNumber.')))
+
+            try:
+                response = self.head_object_part_or_range_response(bucket=bucket, obj=fileobj, part_number=part_number,
+                                                                   header_range=ranges)
+            except exceptions.S3Error as e:
+                return self.exception_response(request, e)
+        else:
+            try:
+                response = self.head_object_common_response(bucket=bucket, obj=fileobj)
+            except exceptions.S3Error as e:
+                return self.exception_response(request, e)
+
+        # 防止标头Content-Type被渲染器覆盖
+        response.content_type = response['Content-Type'] if response.has_header('Content-Type') else None
+        return response
+
+    def head_object_no_multipart_response(self, obj, status_code: int = 200):
+        """
+        非多部分对象head响应
+        """
+        headers = self.head_object_common_headers(obj=obj)
+        return Response(status=status_code, headers=headers)
+
+    def head_object_common_response(self, bucket, obj):
+        """
+        对象head响应，会检测对象是否是多部分对象
+        :raises: S3Error
+        """
+        # multipart object check
+        parts_qs = ObjectPartManager(bucket=bucket).get_parts_queryset_by_obj_id(obj_id=obj.id)
+        part = parts_qs.first()
+        headers = self.head_object_common_headers(obj=obj, part=part)
+
+        return Response(status=status.HTTP_200_OK, headers=headers)
+
+    @staticmethod
+    def head_object_common_headers(obj, part=None):
+        last_modified = obj.upt if obj.upt else obj.ult
+        headers = {
+            'Content-Length': obj.si,
+            'Last-Modified': serializers.time_to_gmt(last_modified),
+            'Accept-Ranges': 'bytes',  # 接受类型，支持断点续传
+            'Content-Type': 'binary/octet-stream'
+        }
+
+        if part:
+            headers['ETag'] = part.obj_etag
+            headers['x-amz-mp-parts-count'] = part.parts_count
+        else:
+            headers['ETag'] = obj.md5
+
+        return headers
+
+    def head_object_part_or_range_response(self, bucket, obj, part_number: int, header_range: str):
+        """
+        head对象指定部分编号或byte范围
+
+        :param bucket: 桶实例
+        :param obj: 对象元数据实例
+        :param part_number: int or None
+        :param header_range: str or None
+        :return:
+
+        :raises: S3Error
+        """
+        obj_size = obj.si
+        response = Response(status=status.HTTP_206_PARTIAL_CONTENT)
+
+        if header_range:
+            offset, end = self.get_object_offset_and_end(header_range, filesize=obj_size)
+
+            # multipart object check
+            parts_qs = ObjectPartManager(bucket=bucket).get_parts_queryset_by_obj_id(obj_id=obj.id)
+            part = parts_qs.first()
+            if part:
+                response['ETag'] = part.obj_etag
+                response['x-amz-mp-parts-count'] = part.parts_count
+            else:
+                response['ETag'] = obj.md5
+        elif part_number:
+            part = self.get_object_part(bucket=bucket, obj_id=obj.id, part_number=part_number)
+            if not part:
+                return self.head_object_no_multipart_response(obj, status_code=status.HTTP_206_PARTIAL_CONTENT)
+
+            response['ETag'] = part.obj_etag
+            response['x-amz-mp-parts-count'] = part.parts_count
+            offset = part.obj_offset
+            size = part.size
+            end = offset + size - 1
+        else:
+            raise exceptions.S3InvalidRequest()
+
+        last_modified = obj.upt if obj.upt else obj.ult
+        response['Content-Range'] = f'bytes {offset}-{end}/{obj_size}'
+        response['Content-Length'] = end - offset + 1
+        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
+        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
+        response['Content-Type'] = 'binary/octet-stream'  # 注意格式
+        return response
+
