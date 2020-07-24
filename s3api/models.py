@@ -29,7 +29,7 @@ class MultipartUpload(models.Model):
     obj_key = models.CharField(verbose_name='object key', max_length=1024, default='')
     key_md5 = models.CharField(max_length=32, verbose_name='object key MD5')
     create_time = models.DateTimeField(verbose_name='创建时间', auto_now_add=True)
-    expire_time = models.DateTimeField(verbose_name='过期时间', null=True, default=None, help_text='上传过程终止时间')
+    expire_time = models.DateTimeField(verbose_name='对象过期时间', null=True, default=None, help_text='上传过程终止时间')
     status = models.SmallIntegerField(verbose_name='状态', choices=STATUS_CHOICES, default=STATUS_UPLOADING)
     obj_perms_code = models.SmallIntegerField(verbose_name='对象访问权限', default=0)
 
@@ -97,23 +97,6 @@ class MultipartUpload(models.Model):
             return True
 
         return False
-
-    def update_expires_time(self, time):
-        """
-        更新过期时间
-
-        :param time: datetime or None
-        :return:
-            True
-            False
-        """
-        self.expire_time = time
-        try:
-            self.save(update_fields=['expire_time'])
-        except Exception as e:
-            return False
-
-        return True
 
     def is_composing(self):
         """

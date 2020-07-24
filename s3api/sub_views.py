@@ -3,7 +3,7 @@ import re
 from collections import OrderedDict
 
 from django.utils.translation import gettext as _
-from django.http import FileResponse, QueryDict
+from django.http import FileResponse
 from django.utils.http import urlquote
 from django.conf import settings
 from django.utils import timezone
@@ -24,6 +24,7 @@ from .harbor import HarborManager
 from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
 from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler, S3ObjectMultipartETagHandler
 from utils.oss.pyrados import HarborObject, RadosError, ObjectPart
+from utils.time import datetime_from_gmt
 from buckets.models import BucketFileBase
 from . import serializers
 from . import paginations
@@ -397,11 +398,6 @@ class ObjViewSet(CustomGenericViewSet):
         if part_number is not None and header_range is not None:
             return self.exception_response(request, exceptions.S3InvalidRequest())
 
-        response_content_disposition = request.query_params.get('response-content-disposition', None)
-        response_content_type = request.query_params.get('response-content-type', None)
-        response_content_encoding = request.query_params.get('response-content-encoding', None)
-        response_content_language = request.query_params.get('response-content-language', None)
-
         # 存储桶验证和获取桶对象
         hm = HarborManager()
         try:
@@ -432,7 +428,18 @@ class ObjViewSet(CustomGenericViewSet):
             except exceptions.S3Error as e:
                 return self.exception_response(request, e)
 
+        upt = fileobj.upt if fileobj.upt else fileobj.ult
+        etag = response['ETag']
+        try:
+            self.head_object_precondition_if_headers(request, obj_upt=upt, etag=etag)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
         # 用户设置的参数覆盖
+        response_content_disposition = request.query_params.get('response-content-disposition', None)
+        response_content_type = request.query_params.get('response-content-type', None)
+        response_content_encoding = request.query_params.get('response-content-encoding', None)
+        response_content_language = request.query_params.get('response-content-language', None)
         if response_content_disposition:
             response['Content-Disposition'] = response_content_disposition
         if response_content_encoding:
@@ -830,8 +837,8 @@ class ObjViewSet(CustomGenericViewSet):
         obj_path_name = self.get_obj_path_name(request)
         expires = request.headers.get('Expires', None)
         expires_time = None
-        if expires:
-            expires_time = serializers.datetime_from_gmt(expires)
+        if expires:     # 对象不再存储（删除）的时间
+            expires_time = datetime_from_gmt(expires)
             if expires_time is None:
                 return self.exception_response(request, exceptions.S3InvalidArgument("Expires is invalid GMT datetime"))
 
@@ -1386,6 +1393,13 @@ class ObjViewSet(CustomGenericViewSet):
             except exceptions.S3Error as e:
                 return self.exception_response(request, e)
 
+        upt = fileobj.upt if fileobj.upt else fileobj.ult
+        etag = response['ETag']
+        try:
+            self.head_object_precondition_if_headers(request, obj_upt=upt, etag=etag)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
         # 防止标头Content-Type被渲染器覆盖
         response.content_type = response['Content-Type'] if response.has_header('Content-Type') else None
         return response
@@ -1474,3 +1488,65 @@ class ObjViewSet(CustomGenericViewSet):
         response['Content-Type'] = 'binary/octet-stream'  # 注意格式
         return response
 
+    @staticmethod
+    def compare_since(t, since: str):
+        """
+        :param t:
+        :param since:
+        :return:
+            True    # t >= since
+            False   # t < since
+        """
+        dt = datetime_from_gmt(since)
+        if not dt:
+            raise exceptions.S3InvalidRequest(extend_msg='Invalid value of header If-Modified-Since.')
+
+        t_ts = t.timestamp()
+        dt_ts = dt.timestamp()
+        if t_ts >= dt_ts:     # 指定时间以来有改动
+            return True
+
+        return False
+
+    def head_object_precondition_if_headers(self, request, obj_upt, etag: str):
+        """
+        标头if条件检查
+
+        :param request:
+        :param obj_upt: 对象最后修改时间
+        :param etag: 对象etag
+        :return: None
+        :raises: S3Error
+        """
+        match = request.headers.get('If-Match', None)
+        none_match = request.headers.get('If-None-Match', None)
+        modified_since = request.headers.get('If-Modified-Since', None)
+        unmodified_since = request.headers.get('If-Unmodified-Since', None)
+
+        if (match is not None or none_match is not None) and not etag:
+            raise exceptions.S3PreconditionFailed(extend_msg='ETag of the object is empty, Cannot support "If-Match" and "If-None-Match".')
+
+        if match is not None and unmodified_since is not None:
+            if match != etag:       # If-Match: False
+                raise exceptions.S3PreconditionFailed()
+            else:
+                if self.compare_since(t=obj_upt, since=unmodified_since):  # 指定时间以来改动; If-Unmodified-Since: False
+                    pass
+        elif match is not None:
+            if match != etag:       # If-Match: False
+                raise exceptions.S3PreconditionFailed()
+        elif unmodified_since is not None:
+            if self.compare_since(t=obj_upt, since=unmodified_since):   # 指定时间以来有改动；If-Unmodified-Since: False
+                raise exceptions.S3PreconditionFailed()
+
+        if none_match is not None and modified_since is not None:
+            if none_match == etag:  # If-None-Match: False
+                raise exceptions.S3NotModified()
+            elif not self.compare_since(t=obj_upt, since=modified_since):   # 指定时间以来无改动; If-modified-Since: False
+                raise exceptions.S3NotModified()
+        elif none_match is not None:
+            if none_match == etag:  # If-None-Match: False
+                raise exceptions.S3NotModified()
+        elif modified_since is not None:
+            if not self.compare_since(t=obj_upt, since=modified_since):  # 指定时间以来无改动; If-modified-Since: False
+                raise exceptions.S3NotModified()

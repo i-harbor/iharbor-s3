@@ -264,3 +264,16 @@ class S3CompleteMultipartAlreadyInProgress(S3Error):
     default_message = 'Complete multipart upload is already in progress.'
     default_code = 'CompleteMultipartAlreadyInProgress'
     default_status_code = 409
+
+
+class S3PreconditionFailed(S3Error):
+    default_message = 'At least one of the preconditions you specified did not hold.'
+    default_code = 'PreconditionFailed'
+    default_status_code = 412
+
+
+class S3NotModified(S3Error):
+    default_message = 'Not Modified.'
+    default_code = 'NotModified'
+    default_status_code = 304
+

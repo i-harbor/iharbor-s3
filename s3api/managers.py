@@ -74,7 +74,7 @@ def update_upload_belong_to_object(upload, bucket, obj_key: str, obj_perms_code:
     :param obj_key: S3 Key, 对象全路径
     :param obj_id: 对象元数据id, 默认0不记录id
     :param obj_perms_code: 对象分享访问权限码
-    :param expire_time: datetime(), 上传缓存过期时间，默认30天
+    :param expire_time: datetime(), 对象缓存过期时间
     :return:
         True
 
@@ -82,10 +82,7 @@ def update_upload_belong_to_object(upload, bucket, obj_key: str, obj_perms_code:
     """
     self = upload
     need_update = ['expire_time']
-    if expire_time is not None:
-        self.expire_time = expire_time
-    else:
-        self.expire_time = datetime.now() + timedelta(days=30)      # 默认一个月到期
+    self.expire_time = expire_time
 
     if self.bucket_name != bucket.name:
         self.bucket_name = bucket.name
