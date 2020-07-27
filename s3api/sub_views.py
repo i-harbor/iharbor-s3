@@ -170,7 +170,7 @@ class BucketViewSet(CustomGenericViewSet):
         user = request.user
         perms = acl_choices[acl]
         pool_name = get_ceph_poolname_rand()
-        bucket = Bucket(pool_name=pool_name, user=user, name=bucket_name, access_permission=perms)
+        bucket = Bucket(pool_name=pool_name, user=user, name=bucket_name, access_permission=perms, type=Bucket.TYPE_S3)
         try:
             bucket.save()
         except Exception as e:
