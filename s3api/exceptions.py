@@ -212,18 +212,6 @@ class S3CredentialsNotSupported(S3Error):
     default_status_code = 400
 
 
-class DirectoryAlreadyExists(S3Error):
-    default_message = "Directory already exists."
-    default_code = 'DirectoryAlreadyExists'
-    default_status_code = 400
-
-
-class ObjectKeyAlreadyExists(S3Error):
-    default_message = 'The specified key already exists.'
-    default_code = 'ObjectKeyAlreadyExists'
-    default_status_code = 400
-
-
 class S3IncompleteBody(S3Error):
     default_message = "You did not provide the number of bytes specified by the Content-Length HTTP header."
     default_code = 'IncompleteBody'
@@ -260,12 +248,6 @@ class S3MalformedXML(S3Error):
     default_status_code = 400
 
 
-class S3CompleteMultipartAlreadyInProgress(S3Error):
-    default_message = 'Complete multipart upload is already in progress.'
-    default_code = 'CompleteMultipartAlreadyInProgress'
-    default_status_code = 409
-
-
 class S3PreconditionFailed(S3Error):
     default_message = 'At least one of the preconditions you specified did not hold.'
     default_code = 'PreconditionFailed'
@@ -275,5 +257,30 @@ class S3PreconditionFailed(S3Error):
 class S3NotModified(S3Error):
     default_message = 'Not Modified.'
     default_code = 'NotModified'
+    default_status_code = 304
+
+
+# 自定义异常
+class DirectoryAlreadyExists(S3Error):
+    default_message = "Directory already exists."
+    default_code = 'DirectoryAlreadyExists'
+    default_status_code = 400
+
+
+class ObjectKeyAlreadyExists(S3Error):
+    default_message = 'The specified key already exists.'
+    default_code = 'ObjectKeyAlreadyExists'
+    default_status_code = 400
+
+
+class S3CompleteMultipartAlreadyInProgress(S3Error):
+    default_message = 'Complete multipart upload is already in progress.'
+    default_code = 'CompleteMultipartAlreadyInProgress'
+    default_status_code = 409
+
+
+class S3NotS3Bucket(S3Error):
+    default_message = "It's not S3 bucket, does not support multipart uploads."
+    default_code = 'NotS3Bucket'
     default_status_code = 304
 

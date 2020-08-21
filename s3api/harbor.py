@@ -650,11 +650,11 @@ class HarborManager:
 
         return obj, True
 
-    def _pre_reset_upload(self, parts_table_name: str, obj, rados):
+    def _pre_reset_upload(self, bucket, obj, rados):
         """
         覆盖上传前的一些操作
 
-        :param parts_table_name: 对象part元数据数据库表名
+        :param bucket: 桶实例
         :param obj: 文件对象元数据
         :param rados: rados接口类对象
         :return:
@@ -671,15 +671,17 @@ class HarborManager:
         if not obj.do_save(update_fields=['ult', 'si']):
             raise exceptions.S3InternalError('修改对象元数据失败')
 
-        # 可能是多部分上传对象，删除part元数据
-        try:
-            ObjectPartManager(parts_table_name=parts_table_name).remove_object_parts(obj_id=obj.id)
-        except Exception as e:
-            # 恢复元数据
-            obj.ult = old_ult
-            obj.si = old_size
-            obj.do_save(update_fields=['ult', 'si'])
-            raise exceptions.S3InternalError('删除对象part元数据失败')
+        if bucket.is_s3_bucket():
+            parts_table_name = bucket.get_parts_table_name()
+            # 可能是多部分上传对象，删除part元数据
+            try:
+                ObjectPartManager(parts_table_name=parts_table_name).remove_object_parts(obj_id=obj.id)
+            except Exception as e:
+                # 恢复元数据
+                obj.ult = old_ult
+                obj.si = old_size
+                obj.do_save(update_fields=['ult', 'si'])
+                raise exceptions.S3InternalError('删除对象part元数据失败')
 
         ok, _ = rados.delete()
         if not ok:
@@ -781,7 +783,8 @@ class HarborManager:
         if not fileobj.do_delete():
             raise exceptions.S3InternalError('删除对象原数据时错误')
 
-        ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
+        if bucket.is_s3_bucket():
+            ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
 
         pool_name = bucket.get_pool_name()
         ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=fileobj.si)
@@ -928,10 +931,9 @@ class HarborManager:
 
     def __write_generator(self, bucket, pool_name, obj_rados_key, obj, created):
         ok = True
-        table_name = bucket.get_parts_table_name()
         rados = HarborObject(pool_name=pool_name, obj_id=obj_rados_key, obj_size=obj.si)
         if created is False:  # 对象已存在，不是新建的,重置对象大小
-            self._pre_reset_upload(parts_table_name=table_name, obj=obj, rados=rados)
+            self._pre_reset_upload(bucket=bucket, obj=obj, rados=rados)
 
         while True:
             offset, data = yield ok

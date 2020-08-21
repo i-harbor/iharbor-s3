@@ -672,12 +672,11 @@ class ObjViewSet(CustomGenericViewSet):
 
         pool_name = bucket.get_pool_name()
         obj_key = obj.get_obj_key(bucket.id)
-        parts_table_name = bucket.get_parts_table_name()
 
         rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         if created is False:  # 对象已存在，不是新建的
             try:
-                h_manager._pre_reset_upload(parts_table_name=parts_table_name, obj=obj, rados=rados)  # 重置对象大小
+                h_manager._pre_reset_upload(bucket=bucket, obj=obj, rados=rados)  # 重置对象大小
             except Exception as exc:
                 raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
 
@@ -854,6 +853,9 @@ class ObjViewSet(CustomGenericViewSet):
         if not bucket:
             raise exceptions.S3NoSuchBucket('存储桶不存在')
 
+        if not bucket.is_s3_bucket():
+            return self.exception_response(request, exceptions.S3NotS3Bucket())
+
         mu_mgr = MultipartUploadManager()
         try:
             upload = mu_mgr.get_multipart_upload_delete_invalid(bucket=bucket, obj_path=obj_path_name)
@@ -916,6 +918,9 @@ class ObjViewSet(CustomGenericViewSet):
             upload, bucket = self.get_upload_and_bucket(request=request, upload_id=upload_id, bucket_name=bucket_name)
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
+
+        if not bucket.is_s3_bucket():
+            return self.exception_response(request, exceptions.S3NotS3Bucket())
 
         if upload.is_composing():  # 正在组合对象，不允许操作
             return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
@@ -1129,12 +1134,11 @@ class ObjViewSet(CustomGenericViewSet):
         hm = HarborManager()
         obj, created = hm.get_or_create_obj(table_name=bucket.get_bucket_table_name(), obj_path_name=obj_path_name)
 
-        parts_table_name = bucket.get_parts_table_name()
         obj_raods_key = obj.get_obj_key(bucket.id)
         obj_rados = HarborObject(pool_name=bucket.pool_name, obj_id=obj_raods_key, obj_size=obj.si)
         if not created and obj.si != 0:     # 已存在的非空对象
             try:
-                hm._pre_reset_upload(parts_table_name=parts_table_name, obj=obj, rados=obj_rados)  # 重置对象大小
+                hm._pre_reset_upload(bucket=bucket, obj=obj, rados=obj_rados)  # 重置对象大小
             except Exception as exc:
                 raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
 

@@ -5,7 +5,7 @@ from . import views
 
 
 router = NoDetailRouter(trailing_slash=False)
-router.register(r'', views.MainHostViewSet, base_name='bucket')
+router.register(r'', views.MainHostViewSet, basename='bucket')
 
 
 urlpatterns = [

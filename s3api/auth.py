@@ -112,7 +112,7 @@ class S3V4Authentication(BaseAuthentication):
         self.s3_credential = credential
         self.s3_signed_headers = signed_headers
 
-        access_key, date, self._region_name, self._service_name, _ = credential.split('/')
+        access_key, date, self._region_name, self._service_name, *arg = credential.split('/')
         model = self.get_model()
         try:
             auth_key = model.objects.select_related('user').get(id=access_key)

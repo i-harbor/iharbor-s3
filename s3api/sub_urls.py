@@ -5,8 +5,8 @@ from . import sub_views
 
 
 router = NoDetailRouter(trailing_slash=False)
-router.register(r'', sub_views.BucketViewSet, base_name='bucket')
-router.register(r'.+', sub_views.ObjViewSet, base_name='obj')
+router.register(r'', sub_views.BucketViewSet, basename='bucket')
+router.register(r'.+', sub_views.ObjViewSet, basename='obj')
 
 
 urlpatterns = [

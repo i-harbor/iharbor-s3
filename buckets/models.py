@@ -342,6 +342,9 @@ class Bucket(models.Model):
 
         return True
 
+    def is_s3_bucket(self):
+        return self.type == self.TYPE_S3
+
 
 class Archive(models.Model):
     """
