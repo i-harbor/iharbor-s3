@@ -85,12 +85,18 @@ class BucketViewSet(CustomGenericViewSet):
         if not bucket_name:
             return self.exception_response(request, exceptions.S3InvalidRequest('Invalid request domain name'))
 
-        bucket = Bucket.get_bucket_by_name(bucket_name)
-        if not bucket_name:
-            return self.exception_response(request, exceptions.S3NoSuchKey('Invalid request domain name'))
+        hm = HarborManager()
+        try:
+            bucket, qs = hm.get_bucket_objects_dirs_queryset(bucket_name=bucket_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
 
-        if not bucket.check_user_own_bucket(user=request.user):
-            return self.exception_response(request, exceptions.S3AccessDenied())
+        try:
+            not_empty = qs.exists()
+        except Exception as e:
+            return self.exception_response(request, e)
+        if not_empty:
+            return self.exception_response(request, exceptions.S3BucketNotEmpty())
 
         if not bucket.delete_and_archive():  # 删除归档
             return self.exception_response(request, exceptions.S3InternalError(_('删除存储桶失败')))
@@ -103,7 +109,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, exceptions.S3InvalidRequest('Invalid request domain name'))
 
         bucket = Bucket.get_bucket_by_name(bucket_name)
-        if not bucket_name:
+        if not bucket:
             return self.exception_response(request, exceptions.S3NoSuchBucket())
 
         if bucket.is_public_permission():
