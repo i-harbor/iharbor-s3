@@ -2,7 +2,7 @@ import base64
 import re
 from collections import OrderedDict
 
-from django.utils.translation import gettext as _
+from django.utils.translation import gettext
 from django.http import FileResponse
 from django.utils.http import urlquote
 from django.conf import settings
@@ -99,7 +99,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, exceptions.S3BucketNotEmpty())
 
         if not bucket.delete_and_archive():  # 删除归档
-            return self.exception_response(request, exceptions.S3InternalError(_('删除存储桶失败')))
+            return self.exception_response(request, exceptions.S3InternalError(gettext('删除存储桶失败')))
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -180,7 +180,7 @@ class BucketViewSet(CustomGenericViewSet):
         try:
             bucket.save()
         except Exception as e:
-            return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶元数据错误')))
+            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶元数据错误')))
 
         col_name = bucket.get_bucket_table_name()
         bfm = BucketFileManagement(collection_name=col_name)
@@ -188,7 +188,7 @@ class BucketViewSet(CustomGenericViewSet):
         if not create_table_for_model_class(model=model_class):
             bucket.delete()
             delete_table_for_model_class(model=model_class)
-            return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶object表错误')))
+            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶object表错误')))
 
         part_table_name = bucket.get_parts_table_name()
         parts_class = get_parts_model_class(table_name=part_table_name)
@@ -196,7 +196,7 @@ class BucketViewSet(CustomGenericViewSet):
             bucket.delete()
             delete_table_for_model_class(model=parts_class)
             delete_table_for_model_class(model=model_class)
-            return self.exception_response(request, exceptions.S3InternalError(message=_('创建存储桶失败，存储桶parts表错误')))
+            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶parts表错误')))
 
         return Response(status=status.HTTP_200_OK, headers={'Location': '/' + bucket_name})
 
@@ -210,7 +210,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.list_objects_v2_list_prefix(request=request, prefix=prefix)
 
         if delimiter != '/':
-            return self.exception_response(request, exceptions.S3InvalidArgument(message=_('参数“delimiter”必须是“/”')))
+            return self.exception_response(request, exceptions.S3InvalidArgument(message=gettext('参数“delimiter”必须是“/”')))
 
         path = prefix.strip('/')
         if prefix and not path:     # prefix invalid, return no match data
@@ -322,7 +322,7 @@ class BucketViewSet(CustomGenericViewSet):
         return Response(data=ret_data, status=status.HTTP_200_OK)
 
     def list_objects_v1(self, request, *args, **kwargs):
-        return self.exception_response(request, exceptions.S3InvalidArgument(_("Version v1 of ListObjects is not supported now.")))
+        return self.exception_response(request, exceptions.S3InvalidArgument(gettext("Version v1 of ListObjects is not supported now.")))
 
 
 class ObjViewSet(CustomGenericViewSet):
@@ -391,7 +391,7 @@ class ObjViewSet(CustomGenericViewSet):
 
     def head(self, request, *args, **kwargs):
         """
-        head bucket
+        head object
         """
         return self.head_object(request=request, args=args, kwargs=kwargs)
 
@@ -407,7 +407,8 @@ class ObjViewSet(CustomGenericViewSet):
         # 存储桶验证和获取桶对象
         hm = HarborManager()
         try:
-            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name)
+            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name,
+                                                    user=request.user, all_public=True)
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
@@ -425,7 +426,7 @@ class ObjViewSet(CustomGenericViewSet):
                 part_number = int(part_number)
                 response = self.s3_get_object_part_response(bucket=bucket, obj=fileobj, part_number=part_number)
             except ValueError:
-                return self.exception_response(request, exceptions.S3InvalidArgument(message=_('无效的参数partNumber.')))
+                return self.exception_response(request, exceptions.S3InvalidArgument(message=gettext('无效的参数partNumber.')))
             except exceptions.S3Error as e:
                 return self.exception_response(request, e)
         else:
@@ -645,15 +646,15 @@ class ObjViewSet(CustomGenericViewSet):
 
         # 对象是否共享的，并且在有效共享事件内
         if not obj.is_shared_and_in_shared_time():
-            raise exceptions.S3AccessDenied(message=_('您没有访问权限'))
+            raise exceptions.S3AccessDenied(message=gettext('您没有访问权限'))
 
         # 是否设置了分享密码
         if obj.has_share_password():
             p = request.query_params.get('p', None)
             if p is None:
-                raise exceptions.S3AccessDenied(message=_('资源设有共享密码访问权限'))
+                raise exceptions.S3AccessDenied(message=gettext('资源设有共享密码访问权限'))
             if not obj.check_share_password(password=p):
-                raise exceptions.S3AccessDenied(message=_('共享密码无效'))
+                raise exceptions.S3AccessDenied(message=gettext('共享密码无效'))
 
         return True
 
@@ -1364,20 +1365,13 @@ class ObjViewSet(CustomGenericViewSet):
         # 存储桶验证和获取桶对象
         hm = HarborManager()
         try:
-            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name)
+            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name,
+                                                    user=request.user, all_public=True)
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
         if fileobj is None:
-            # 存储桶是否是公有权限
-            if bucket.is_public_permission():
-                return self.exception_response(request, exceptions.S3NoSuchKey())
-
-            # 存储桶是否属于当前用户
-            if bucket.check_user_own_bucket(request.user):
-                return self.exception_response(request, exceptions.S3NoSuchKey())
-
-            return self.exception_response(request, exceptions.S3AccessDenied())
+            return self.exception_response(request, exceptions.S3NoSuchKey())
 
         # 是否有文件对象的访问权限
         try:
@@ -1390,7 +1384,7 @@ class ObjViewSet(CustomGenericViewSet):
                 try:
                     part_number = int(part_number)
                 except ValueError:
-                    return self.exception_response(request, exceptions.S3InvalidArgument(message=_('无效的参数partNumber.')))
+                    return self.exception_response(request, exceptions.S3InvalidArgument(message=gettext('无效的参数partNumber.')))
 
             try:
                 response = self.head_object_part_or_range_response(bucket=bucket, obj=fileobj, part_number=part_number,
@@ -1414,12 +1408,14 @@ class ObjViewSet(CustomGenericViewSet):
         response.content_type = response['Content-Type'] if response.has_header('Content-Type') else None
         return response
 
-    def head_object_no_multipart_response(self, obj, status_code: int = 200):
+    def head_object_no_multipart_response(self, obj, status_code: int = 200, headers=None):
         """
         非多部分对象head响应
         """
-        headers = self.head_object_common_headers(obj=obj)
-        return Response(status=status_code, headers=headers)
+        h = self.head_object_common_headers(obj=obj)
+        if headers:
+            h.update(headers)
+        return Response(status=status_code, headers=h)
 
     def head_object_common_response(self, bucket, obj):
         """
@@ -1480,8 +1476,9 @@ class ObjViewSet(CustomGenericViewSet):
         elif part_number:
             part = self.get_object_part(bucket=bucket, obj_id=obj.id, part_number=part_number)
             if not part:
-                return self.head_object_no_multipart_response(obj, status_code=status.HTTP_206_PARTIAL_CONTENT)
-
+                content_range = f'bytes 0-{obj_size-1}/{obj_size}'
+                return self.head_object_no_multipart_response(obj, status_code=status.HTTP_206_PARTIAL_CONTENT,
+                                                              headers={'Content-Range': content_range})
             response['ETag'] = part.obj_etag
             response['x-amz-mp-parts-count'] = part.parts_count
             offset = part.obj_offset
