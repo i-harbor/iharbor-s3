@@ -6,6 +6,7 @@ from django.db.backends.mysql.schema import DatabaseSchemaEditor
 from django.db import connections, router
 from django.db.models import Sum, Count
 from django.db.models.query import Q
+from django.db.utils import ProgrammingError
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.apps import apps
 from django.conf import settings
@@ -76,9 +77,12 @@ def delete_table_for_model_class(model):
         using = router.db_for_write(model)
         with DatabaseSchemaEditor(connection=connections[using]) as schema_editor:
             schema_editor.delete_model(model)
-    except Exception as e:
+    except (Exception, ProgrammingError) as e:
         msg = traceback.format_exc()
         logger.error(msg)
+        if e.args[0] in [1051, 1146]:  # unknown table or table not exists
+            return True
+
         return False
 
     return True

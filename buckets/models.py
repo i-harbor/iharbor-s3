@@ -397,6 +397,12 @@ class Archive(models.Model):
 
         return self.table_name
 
+    def get_parts_table_name(self):
+        """
+        bucket对应的对象分段元数据数据库表名
+        """
+        return f'parts_{self.original_id}'
+
     def get_pool_name(self):
         return self.pool_name
 
