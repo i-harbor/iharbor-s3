@@ -92,7 +92,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, e)
 
         try:
-            not_empty = qs.exists()
+            not_empty = qs.filter(fod=True).exists()        # 有无对象，忽略目录
         except Exception as e:
             return self.exception_response(request, e)
         if not_empty:

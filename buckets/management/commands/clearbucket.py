@@ -64,19 +64,19 @@ class Command(BaseCommand):
         # 指定名字的桶
         if bucketname:
             self.stdout.write(self.style.NOTICE('Will clear all buckets named {0}'.format(bucketname)))
-            return Archive.objects.filter(name=bucketname, archive_time__lt=self._clear_datetime).all()
+            return Archive.objects.filter(name=bucketname, type=Archive.TYPE_S3, archive_time__lt=self._clear_datetime).all()
 
         # 全部已删除归档的桶
         if all_deleted:
             self.stdout.write(self.style.NOTICE('Will clear all buckets that have been softly deleted '))
-            return Archive.objects.filter(archive_time__lt=self._clear_datetime).all()
+            return Archive.objects.filter(type=Archive.TYPE_S3, archive_time__lt=self._clear_datetime).all()
 
         # 未给出参数
         if not bucketname:
             bucketname = input('Please input a bucket name:')
 
         self.stdout.write(self.style.NOTICE('Will clear all buckets named {0}'.format(bucketname)))
-        return Archive.objects.filter(name=bucketname).all()
+        return Archive.objects.filter(name=bucketname, type=Archive.TYPE_S3).all()
 
     def get_objs_and_dirs(self, modelclass, num=1000):
         """
@@ -154,14 +154,14 @@ class Command(BaseCommand):
                     else:
                         obj.delete()
 
-                self.stdout.write(self.style.WARNING(f"Success deleted {objs.count()} objects from bucket {bucket.name}."))
+                self.stdout.write(self.style.SUCCESS(f"Success deleted {objs.count()} objects from bucket {bucket.name}."))
 
             # 如果bucket对应表没有对象了，删除bucket和表
             if modelclass.objects.filter(fod=True).count() == 0:
                 ok = delete_table_for_model_class(modelclass)       # delete bucket table
                 if ok and self.delete_bucket_and_part_table(bucket):
                     self.stdout.write(self.style.WARNING(f"deleted bucket and it's table, part table:{bucket.name}"))
-                    self.stdout.write('Clearing bucket named {0} is completed'.format(bucket.name))
+                    self.stdout.write(self.style.SUCCESS('Clearing bucket named {0} is completed'.format(bucket.name)))
                 else:
                     self.stdout.write(self.style.ERROR(f'deleted bucket table error:{bucket.name}'))
         except (ProgrammingError, Exception) as e:
@@ -169,13 +169,13 @@ class Command(BaseCommand):
             if e.args[0] == 1146:  # table not exists
                 if self.delete_bucket_and_part_table(bucket):
                     self.stdout.write(self.style.WARNING(f"deleted bucket and it's table, part table:{bucket.name}"))
+                    self.stdout.write(self.style.SUCCESS('Clearing bucket named {0} is completed'.format(bucket.name)))
             else:
                 self.stdout.write(self.style.ERROR(f'deleted bucket({bucket.name}) error: {e}'))
 
         self.pool_sem.release()     # 可用线程数+1
 
     def delete_bucket_and_part_table(self, bucket):
-        self.stdout.write(self.style.ERROR(f'enter delete_bucket_and_part_table'))
         parts_table_name = bucket.get_parts_table_name()
         parts_model_class = get_parts_model_class(parts_table_name)
         ok = delete_table_for_model_class(parts_model_class)  # delete parts table
