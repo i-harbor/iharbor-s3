@@ -39,8 +39,10 @@ MULTIPART_UPLOAD_MIN_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MIN_SIZE', 5 
 
 
 class BucketViewSet(CustomGenericViewSet):
-    http_method_names = ['get', 'put', 'delete', 'head', 'options']
+    http_method_names = ['get', 'post', 'put', 'delete', 'head', 'options']
     renderer_classes = [renders.CusXMLRenderer]
+    content_negotiation_class = CusContentNegotiation
+    parser_classes = [parsers.S3XMLParser]
 
     def list(self, request, *args, **kwargs):
         """
@@ -52,6 +54,16 @@ class BucketViewSet(CustomGenericViewSet):
             return self.list_objects_v2(request=request, args=args, kwargs=kwargs)
 
         return self.list_objects_v1(request=request, args=args, kwargs=kwargs)
+
+    def create(self, request, *args, **kwargs):
+        """
+        DeleteObjects
+        """
+        delete = request.query_params.get('delete')
+        if delete is not None:
+            return self.delete_objects(request)
+
+        return self.exception_response(request, exceptions.S3MethodNotAllowed())
 
     def update(self, request, *args, **kwargs):
         """
@@ -323,6 +335,50 @@ class BucketViewSet(CustomGenericViewSet):
 
     def list_objects_v1(self, request, *args, **kwargs):
         return self.exception_response(request, exceptions.S3InvalidArgument(gettext("Version v1 of ListObjects is not supported now.")))
+
+    def delete_objects(self, request):
+        bucket_name = self.get_bucket_name(request)
+
+        body = request.body
+        content_b64_md5 = self.request.headers.get('Content-MD5', '')
+        md5_hl = FileMD5Handler()
+        md5_hl.update(offset=0, data=body)
+        bytes_md5 = md5_hl.digest()
+        base64_md5 = base64.b64encode(bytes_md5).decode('ascii')
+        if content_b64_md5 != base64_md5:
+            return self.exception_response(request, exceptions.S3BadDigest())
+
+        try:
+            data = request.data
+        except Exception as e:
+            return self.exception_response(request, exceptions.S3MalformedXML())
+
+        root = data.get('Delete')
+        if not root:
+            return self.exception_response(request, exceptions.S3MalformedXML())
+
+        keys = root.get('Object')
+        if not keys:
+            return self.exception_response(request, exceptions.S3MalformedXML())
+
+        # XML解析器行为有关，只有一个item时不是list
+        if not isinstance(keys, list):
+            keys = [keys]
+
+        if len(keys) > 1000:
+            return self.exception_response(request, exceptions.S3MalformedXML(
+                message='You have attempted to delete more objects than allowed 1000'))
+
+        deleted_objs, err_objs = HarborManager().delete_objects(bucket_name=bucket_name, obj_keys=keys)
+
+        quiet = root.get('Quiet', 'false').lower()
+        if quiet == 'true':     # 安静模式不包含 删除成功对象信息
+            data = {'Error': err_objs}
+        else:
+            data = {'Error': err_objs, 'Deleted': deleted_objs}
+
+        self.set_renderer(request, renders.CommonXMLRenderer(root_tag_name='DeleteResult'))
+        return Response(data=data, status=status.HTTP_200_OK)
 
 
 class ObjViewSet(CustomGenericViewSet):

@@ -168,7 +168,6 @@ class HarborManager:
 
             obj, bfm   # 目录或对象存在
             None, bfm  # 目录或对象不存在
-            raise Exception    # 父目录路径错误，不存在
 
         :raises: S3Error
         """
@@ -193,7 +192,6 @@ class HarborManager:
         :param path: 父目录路经
         :param name: 对象名称或目录名称
         :return:
-            raise Exception    # 父目录路径错误，不存在
             obj or None: 目录或对象不存在
 
         :raises: S3Error
@@ -782,25 +780,7 @@ class HarborManager:
         if fileobj is None:
             raise exceptions.S3NoSuchKey('文件对象不存在')
 
-        obj_key = fileobj.get_obj_key(bucket.id)
-        old_id = fileobj.id
-        # 先删除元数据，后删除rados对象（删除失败恢复元数据）
-        if not fileobj.do_delete():
-            raise exceptions.S3InternalError('删除对象原数据时错误')
-
-        if bucket.is_s3_bucket():
-            ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
-
-        pool_name = bucket.get_pool_name()
-        ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=fileobj.si)
-        ok, _ = ho.delete()
-        if not ok:
-            # 恢复元数据
-            fileobj.id = old_id
-            fileobj.do_save(force_insert=True)  # 仅尝试创建文档，不修改已存在文档
-            raise exceptions.S3InternalError('删除对象rados数据时错误')
-
-        return True
+        return self.do_delete_obj_or_dir(bucket, fileobj)
 
     def read_chunk(self, bucket_name: str, obj_path: str, offset: int, size: int, user=None):
         """
@@ -1163,4 +1143,92 @@ class HarborManager:
         """
         bfm = BucketFileManagement(collection_name=table_name)
         return bfm.get_prefix_objects_dirs_queryset(prefix=prefix)
+
+    def delete_objects(self, bucket_name: str, obj_keys: list, user=None):
+        """
+        删除多个对象
+
+        不存在的对象将包含在已删除的结果中
+        :param bucket_name: 桶名
+        :param obj_keys: 对象全路径列表；[{"Key": "xxx"}, ]
+        :param user: 用户，默认为None，如果给定用户只删除属于此用户的对象（只查找此用户的存储桶）
+        :return:
+            (deleted_objs: list, err_deleted_objs: list)
+
+            deleted_objs like [{"Key": "xxx"},...]
+            err_deleted_objs like [{"Code": "xxx", "Message": "xxx", "Key": "xxx"}, ]
+        """
+        bucket = self.get_public_or_user_bucket(name=bucket_name, user=user)
+        table_name = bucket.get_bucket_table_name()
+
+        deleted_objects = []
+        not_delete_objects = []
+        for item in obj_keys:
+            obj_key = key = item.get('Key', '')
+            if key.endswith('/'):       # 目录
+                key_is_dir = True
+                obj_key = key.rstrip('/')
+            else:
+                key_is_dir = False
+
+            path, filename = PathParser(filepath=obj_key).get_path_and_filename()
+            try:
+                try:
+                    obj = self._get_obj_or_dir(table_name=table_name, path=path, name=filename)
+                except Exception as e:
+                    if not isinstance(e, exceptions.S3Error):
+                        raise exceptions.S3InternalError(f'查询对象元数据错误，{str(e)}')
+                    raise e
+
+                if not obj:
+                    raise exceptions.S3NoSuchKey()
+
+                if (key_is_dir and obj.is_dir()) or (not key_is_dir and obj.is_file()):
+                    self.do_delete_obj_or_dir(bucket=bucket, obj=obj)
+                    deleted_objects.append({"Key": key})
+                else:
+                    raise exceptions.S3NoSuchKey()
+            except exceptions.S3NoSuchKey as e:
+                deleted_objects.append({"Key": key})
+            except exceptions.S3Error as e:
+                err = e.err_data()
+                err['Key'] = key
+                not_delete_objects.append(err)
+
+        return deleted_objects, not_delete_objects
+
+    @staticmethod
+    def do_delete_obj_or_dir(bucket, obj):
+        """
+        删除一个对象或目录
+        :param bucket:
+        :param obj:
+        :return:
+            True
+
+        :raises: S3Error
+        """
+        obj_key = obj.get_obj_key(bucket.id)
+        old_id = obj.id
+
+        # 先删除元数据，后删除rados对象（删除失败恢复元数据）
+        if not obj.do_delete():
+            raise exceptions.S3InternalError('删除对象原数据时错误')
+
+        if obj.is_dir():
+            return True
+
+        if bucket.is_s3_bucket():
+            ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
+
+        pool_name = bucket.get_pool_name()
+        ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        ok, _ = ho.delete()
+        if not ok:
+            # 恢复元数据
+            obj.id = old_id
+            obj.do_save(force_insert=True)  # 仅尝试创建文档，不修改已存在文档
+            raise exceptions.S3InternalError('删除对象rados数据时错误')
+
+        return True
 

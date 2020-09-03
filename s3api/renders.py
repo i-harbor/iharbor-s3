@@ -97,6 +97,8 @@ class CommonXMLRenderer(BaseRenderer):
         <a>1</a>
         <a>2</a>
     """
+    media_type = "application/xml"
+
     def __init__(self, root_tag_name: str = 'root'):
         self.root_tag_name = root_tag_name
         self.item_tag_name = 'item_tag_name'
@@ -112,9 +114,9 @@ class CommonXMLRenderer(BaseRenderer):
 
         xml = SimplerXMLGenerator(stream, self.charset)
         xml.startDocument()
-
+        xml.startElement(self.root_tag_name, {})
         self._to_xml(xml, data)
-
+        xml.endElement(self.root_tag_name)
         xml.endDocument()
         return stream.getvalue()
 
