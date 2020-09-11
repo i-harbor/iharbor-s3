@@ -25,7 +25,7 @@ class BucketListSerializer(serializers.Serializer):
 
     @staticmethod
     def get_creation_date(obj):
-        return serializers.DateTimeField().to_representation(obj.created_time)
+        return serializers.DateTimeField(default_timezone=utc).to_representation(obj.created_time)
 
     @staticmethod
     def get_name(obj):
@@ -51,7 +51,7 @@ class ObjectListSerializer(serializers.Serializer):
     @staticmethod
     def get_last_modified(obj):
         t = obj.upt if obj.upt else obj.ult
-        return serializers.DateTimeField().to_representation(t)
+        return serializers.DateTimeField(default_timezone=utc).to_representation(t)
 
     @staticmethod
     def get_etag(obj):

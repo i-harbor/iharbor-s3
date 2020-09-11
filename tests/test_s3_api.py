@@ -91,9 +91,7 @@ def file_upload_part(s3, bucket_name, key, upload_id, filename, part_size):
                 # SSECustomerKey='string',
                 # RequestPayer='requester'
             )
-            print(r)
             etag = r['ETag']
-            print(etag)
             parts.append({'PartNumber': part_num, 'ETag': etag})
             part_num += 1
 
@@ -141,7 +139,6 @@ def multipart_upload_object(s3, bucket: str, object_key: str, filename: str, par
                                                             part_size=part_size, expires=expires)
 
     r = complete_multipart_upload(s3, bucket, object_key, upload_id, parts)
-    print(r)
     return upload_id, r
 
 
