@@ -912,9 +912,10 @@ class ObjViewSet(CustomGenericViewSet):
             raise exceptions.S3InvalidRequest(f'The value {x_amz_acl} of header "x-amz-acl" is not supported.')
 
         h_manager = HarborManager()
-        bucket = h_manager.get_bucket(bucket_name, user=request.user)
-        if not bucket:
-            raise exceptions.S3NoSuchBucket('存储桶不存在')
+        try:
+            bucket = h_manager.get_public_or_user_bucket(name=bucket_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
 
         if not bucket.is_s3_bucket():
             return self.exception_response(request, exceptions.S3NotS3Bucket())
