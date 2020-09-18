@@ -39,7 +39,7 @@ class MainHostViewSet(CustomGenericViewSet):
         if not user.id:
             return self.exception_response(request, exceptions.S3AccessDenied(message=_('身份未认证')))
 
-        buckets_qs = Bucket.objects.filter(user=user).all()    # user's own
+        buckets_qs = Bucket.objects.filter(user=user, type=Bucket.TYPE_S3).all()    # user's own
         serializer = BucketListSerializer(buckets_qs, many=True)
 
         # xml渲染器

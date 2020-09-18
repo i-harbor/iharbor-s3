@@ -369,7 +369,7 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(request, exceptions.S3MalformedXML(
                 message='You have attempted to delete more objects than allowed 1000'))
 
-        deleted_objs, err_objs = HarborManager().delete_objects(bucket_name=bucket_name, obj_keys=keys)
+        deleted_objs, err_objs = HarborManager().delete_objects(bucket_name=bucket_name, obj_keys=keys, user=request.user)
 
         quiet = root.get('Quiet', 'false').lower()
         if quiet == 'true':     # 安静模式不包含 删除成功对象信息
