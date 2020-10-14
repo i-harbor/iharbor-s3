@@ -22,7 +22,7 @@ class MainHostViewSet(CustomGenericViewSet):
 
         HTTP/1.1 200
         <?xml version="1.0" encoding="UTF-8"?>
-        <ListBucketsOutput>
+        <ListAllMyBucketsResult>
            <Buckets>
               <Bucket>
                  <CreationDate>timestamp</CreationDate>
@@ -33,7 +33,7 @@ class MainHostViewSet(CustomGenericViewSet):
               <DisplayName>string</DisplayName>
               <ID>string</ID>
            </Owner>
-        </ListBucketsOutput>
+        </ListAllMyBucketsResult>
         """
         user = request.user
         if not user.id:
@@ -43,7 +43,7 @@ class MainHostViewSet(CustomGenericViewSet):
         serializer = BucketListSerializer(buckets_qs, many=True)
 
         # xml渲染器
-        self.set_renderer(request, CusXMLRenderer(root_tag_name='ListBucketsOutput', item_tag_name='Bucket'))
+        self.set_renderer(request, CusXMLRenderer(root_tag_name='ListAllMyBucketsResult', item_tag_name='Bucket'))
         return Response(data={
             'Buckets': serializer.data,
             'Owner': {'DisplayName': user.username, 'ID': user.id}

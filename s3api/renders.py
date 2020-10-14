@@ -13,7 +13,7 @@ class CusXMLRenderer(XMLRenderer):
 
 
 class ListObjectsV2XMLRenderer(XMLRenderer):
-    def __init__(self, root_tag_name: str = 'ListObjectsV2sOutput'):
+    def __init__(self, root_tag_name: str = 'ListBucketResult'):
         self.root_tag_name = root_tag_name
         self.item_tag_name = "list-item"
         self.cur_item_tag_name = self.item_tag_name

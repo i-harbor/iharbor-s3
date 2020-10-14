@@ -949,7 +949,7 @@ class ObjViewSet(CustomGenericViewSet):
             'Key': obj_path_name,
             'UploadId': upload.id
         }
-        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CreateMultipartUploadOutput'))
+        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='InitiateMultipartUploadResult'))
         return Response(data=data, status=status.HTTP_200_OK)
 
     def upload_part(self, request, part_num: str, upload_id: str):
@@ -1179,7 +1179,7 @@ class ObjViewSet(CustomGenericViewSet):
             return self.exception_response(request, exceptions.S3InternalError())
 
         location = request.build_absolute_uri()
-        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CompleteMultipartUploadOutput'))
+        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CompleteMultipartUploadResult'))
         return Response(data={'Location': location, 'Bucket': bucket.name, 'Key': obj_path_name, 'ETag': etag})
 
     def complete_multipart_upload_handle(self, request, bucket, upload, complete_parts, complete_numbers):
