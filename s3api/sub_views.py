@@ -244,7 +244,8 @@ class BucketViewSet(CustomGenericViewSet):
             'Name': bucket_name,
             'Prefix': prefix,
             'EncodingType': 'url',
-            'MaxKeys': max_keys
+            'MaxKeys': max_keys,
+            'Delimiter': delimiter
         }
 
         if prefix == '' or prefix.endswith('/'):  # list dir
