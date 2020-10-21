@@ -36,7 +36,7 @@ class S3V4Authentication(BaseAuthentication):
     def authenticate(self, request):
         credentials = self.get_credentials_from_header(request)
         if credentials is None:
-            credentials = self.get_timestamp_from_query(request)
+            credentials = self.get_credentials_from_query(request)
 
         if credentials is None:
             return None
@@ -92,10 +92,18 @@ class S3V4Authentication(BaseAuthentication):
         if expires_tsp < now_tsp:
             raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='expires')
 
+        credential = request.query_params.get('X-Amz-Credential', '')
+        signature = request.query_params.get('X-Amz-Signature', '')
+        if not credential:
+            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of query param "X-Amz-Credential".')
+
+        if not signature:
+            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of query param "X-Amz-Signature".')
+
         return {
-            'Credential': request.query_params.get('X-Amz-Credential', ''),
+            'Credential': credential,
             'SignedHeaders': request.query_params.get('X-Amz-SignedHeaders', ''),
-            'Signature': request.query_params.get('X-Amz-Signature', '')
+            'Signature': signature
         }
 
     def check_expires(self, ):
