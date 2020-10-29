@@ -5,6 +5,8 @@ from django.utils.translation import gettext as _
 from rest_framework.pagination import CursorPagination, Cursor
 from rest_framework.exceptions import NotFound
 
+from .managers import MultipartUploadManager
+from .models import get_datetime_from_upload_id
 from . import exceptions
 from .harbor import HarborManager
 
@@ -39,7 +41,7 @@ class ListObjectsV2CursorPagination(CursorPagination):
     max_page_size = 1000
     offset_cutoff = 0
 
-    start_after_query_param = 'start-after'     # used if no cursor_query_param
+    start_after_query_param = 'start-after'  # used if no cursor_query_param
 
     def __init__(self, context):
         """
@@ -99,7 +101,7 @@ class ListObjectsV2CursorPagination(CursorPagination):
     def get_paginated_data(self, common_prefixes=False, delimiter='/'):
         is_truncated = 'true' if self.has_next else 'false'
         data = {
-            'IsTruncated': is_truncated,        # can not use True
+            'IsTruncated': is_truncated,  # can not use True
             'MaxKeys': self.page_size,
             'KeyCount': self.key_count
         }
@@ -180,8 +182,8 @@ class ListObjectsV2CursorPagination(CursorPagination):
 
         order = self.ordering[0]
         is_reversed = order.startswith('-')
-        attr = obj.id       # order by id
-        if is_reversed:     # 倒序
+        attr = obj.id  # order by id
+        if is_reversed:  # 倒序
             position = max(attr - 1, 0)
             reverse = False
         else:
@@ -189,3 +191,103 @@ class ListObjectsV2CursorPagination(CursorPagination):
             reverse = True
 
         return Cursor(offset=0, reverse=reverse, position=position)
+
+
+class ListUploadsCursorPagination(CursorPagination):
+    """
+    分页器
+    """
+    cursor_query_param = 'key-marker'
+    cursor_query_description = 'The pagination key-marker value.'
+    page_size = 1000
+    invalid_cursor_message = 'Invalid key-marker'
+    ordering = '-create_time'
+
+    page_size_query_param = 'max-uploads'
+    page_size_query_description = 'Max number of results to return per page.'
+
+    upload_id_marker_query_param = 'upload-id-marker'
+
+    def __init__(self, context):
+        """
+        :param context:
+            {
+                'bucket': bucket,
+                'bucket_name': bucket_name,
+                ...
+            }
+        """
+        if 'bucket' not in context:
+            raise ValueError('Invalid param "context", "bucket" needs to be in it.')
+
+        self._context = context
+
+    def paginate_queryset(self, queryset, request, view=None):
+        self.request = request
+        data = super().paginate_queryset(queryset=queryset, request=request, view=view)
+
+        if data is None:
+            data = []
+        self._data = data
+        self.key_count = len(self._data)
+        return self._data
+
+    @property
+    def page_data(self):
+        if hasattr(self, '_data'):
+            return self._data
+
+        raise AssertionError('You must call `.paginate_queryset()` before accessing `.data`.')
+
+    def get_paginated_data(self):
+        is_truncated = 'true' if self.has_next else 'false'
+        next_key_marker, next_upload_id_marker = self.get_next_key_marker_upload_id_marker()
+        return {'IsTruncated': is_truncated,
+                'MaxUploads': self.page_size,
+                'KeyCount': self.key_count,
+                'KeyMarker': self.get_key_marker(request=self.request),
+                'UploadIdMarker': self.get_upload_id_marker(request=self.request),
+                'NextKeyMarker': next_key_marker,
+                'NextUploadIdMarker': next_upload_id_marker}
+
+    def get_key_marker(self, request):
+        return request.query_params.get(self.cursor_query_param, '')
+
+    def get_upload_id_marker(self, request):
+        return request.query_params.get(self.upload_id_marker_query_param, '')
+
+    def get_next_key_marker_upload_id_marker(self):
+        if self.key_count > 0:
+            up = self.page_data[-1]
+            return up.obj_key, up.id
+
+        return '', ''
+
+    def decode_cursor(self, request):
+        bucket = self._context.get('bucket')
+        key_marker = self.get_key_marker(request)
+        position = None
+        if key_marker:
+            try:
+                upload = MultipartUploadManager().get_multipart_upload_delete_invalid(bucket=bucket, obj_path=key_marker)
+            except exceptions.S3Error as e:
+                raise e
+
+            if upload:
+                position = upload.create_time
+            else:
+                upload_id_marker = self.get_upload_id_marker(request)
+                if upload_id_marker:
+                    position = get_datetime_from_upload_id(upload_id_marker)
+                else:
+                    raise exceptions.S3NoSuchUpload('key-marker upload not found.')
+
+        order = self.ordering[0]
+        is_reversed = order.startswith('-')
+        if is_reversed:  # 倒序
+            reverse = False
+        else:
+            reverse = True
+
+        return Cursor(offset=0, reverse=reverse, position=position)
+

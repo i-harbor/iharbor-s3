@@ -14,6 +14,7 @@ from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
+from s3api.managers import MultipartUploadManager
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
@@ -48,7 +49,12 @@ class BucketViewSet(CustomGenericViewSet):
         """
         list objects (v1 && v2)
         get object metadata
+        ListMultipartUploads
         """
+        uploads = request.query_params.get('uploads', None)
+        if uploads is not None:
+            return self.list_multipart_uploads(request=request, args=args, kwargs=kwargs)
+
         list_type = request.query_params.get('list-type', '1')
         if list_type == '2':
             return self.list_objects_v2(request=request, args=args, kwargs=kwargs)
@@ -336,6 +342,46 @@ class BucketViewSet(CustomGenericViewSet):
 
     def list_objects_v1(self, request, *args, **kwargs):
         return self.exception_response(request, exceptions.S3InvalidArgument(gettext("Version v1 of ListObjects is not supported now.")))
+
+    def list_multipart_uploads(self, request, *args, **kwargs):
+        delimiter = request.query_params.get('delimiter', None)
+        prefix = request.query_params.get('prefix', None)
+        encoding_type = request.query_params.get('encoding-type', None)
+        x_amz_expected_bucket_owner = request.headers.get('x-amz-expected-bucket-owner', None)
+        bucket_name = self.get_bucket_name(request)
+
+        if delimiter is not None:
+            return self.exception_response(request, exceptions.S3InvalidArgument(message=gettext('参数“delimiter”暂时不支持')))
+
+        try:
+            bucket = HarborManager().get_public_or_user_bucket(name=bucket_name, user=request.user)
+        except exceptions.S3Error as e:
+            return self.exception_response(request, e)
+
+        if x_amz_expected_bucket_owner:
+            try:
+                if bucket.id != int(x_amz_expected_bucket_owner):
+                    raise ValueError
+            except ValueError:
+                return self.exception_response(request, exceptions.S3AccessDenied())
+
+        queryset = MultipartUploadManager().list_multipart_uploads_queryset(bucket_name=bucket_name, prefix=prefix)
+        paginator = paginations.ListUploadsCursorPagination(context={'bucket': bucket})
+
+        ret_data = {
+            'Name': bucket_name,
+            'Prefix': prefix
+        }
+        if encoding_type:
+            ret_data['EncodingType'] = encoding_type
+
+        ups = paginator.paginate_queryset(queryset, request=request)
+        serializer = serializers.ListMultipartUploadsSerializer(ups, many=True, context={'user': request.user})
+        data = paginator.get_paginated_data()
+        ret_data.update(data)
+        ret_data['Upload'] = serializer.data
+        self.set_renderer(request, renders.CommonXMLRenderer(root_tag_name='ListMultipartUploadsResult'))
+        return Response(data=ret_data, status=status.HTTP_200_OK)
 
     def delete_objects(self, request):
         bucket_name = self.get_bucket_name(request)
@@ -1041,17 +1087,17 @@ class ObjViewSet(CustomGenericViewSet):
         if not file:
             raise exceptions.S3InvalidRequest('Request body is empty.')
 
-        bytes_md5 = file.md5_handler.digest()
         part_md5 = file.file_md5
         part_size = file.size
 
-        content_b64_md5 = self.request.headers.get('Content-MD5', '')
-        if not content_b64_md5:
-            raise exceptions.S3InvalidDigest()
+        amz_content_sha256 = self.request.headers.get('X-Amz-Content-SHA256', None)
+        if amz_content_sha256 is None:
+            raise exceptions.S3InvalidContentSha256Digest()
 
-        base64_md5 = base64.b64encode(bytes_md5).decode('ascii')
-        if content_b64_md5 != base64_md5:
-            raise exceptions.S3BadDigest()
+        if amz_content_sha256 != 'UNSIGNED-PAYLOAD':
+            part_sha256 = file.sha256_handler.hexdigest()
+            if amz_content_sha256 != part_sha256:
+                raise exceptions.S3BadContentSha256Digest()
 
         part = op_mgr.get_part_by_upload_id_part_num(upload_id=upload.id, part_num=part_number)
         if part:

@@ -1,12 +1,42 @@
 import uuid
+import base64
+from _datetime import datetime
 
 from django.db import models
+from django.utils import timezone
 
 from utils.md5 import get_str_hexMD5
 
 
 def uuid1_uuid4_hex_string():
     return uuid.uuid1().hex + uuid.uuid4().hex
+
+
+def uuid1_time_hex_string(t):
+    f = t.timestamp()
+    h = uuid.uuid1().hex
+    s = f'{f:.6f}'
+    bs = base64.b64encode(s.encode(encoding='utf-8')).decode('ascii')
+    return f'{h}_{bs}'
+
+
+def get_datetime_from_upload_id(upload_id: str):
+    """
+    :return:
+        datetime()
+        None
+    """
+    l = upload_id.split('_', maxsplit=1)
+    if len(l) != 2:
+        return None
+
+    s = base64.b64decode(l[-1]).decode("utf-8")
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+
+    return datetime.fromtimestamp(f, tz=timezone.utc)
 
 
 class MultipartUpload(models.Model):
@@ -57,9 +87,12 @@ class MultipartUpload(models.Model):
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.id:
-            self.id = uuid1_uuid4_hex_string()
+            t = timezone.now()
+            self.id = uuid1_time_hex_string(t)
+            self.create_time = t
             if update_fields:
                 update_fields.append('id')
+                update_fields.append('create_time')
 
         old_key_md5 = self.key_md5
         self.reset_key_md5()                # 每次更新，都确保key_md5和obj_key同步变更

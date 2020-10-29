@@ -84,3 +84,45 @@ class ObjectListWithOwnerSerializer(ObjectListSerializer):
 
         self.context['owner'] = owner
         return owner
+
+
+class ListMultipartUploadsSerializer(serializers.Serializer):
+    """
+    多部分上传列化器
+    """
+    UploadId = serializers.SerializerMethodField(method_name='get_upload_id')
+    Key = serializers.SerializerMethodField(method_name='get_key')
+    Initiated = serializers.SerializerMethodField(method_name='get_initiated')
+    Initiator = serializers.SerializerMethodField(method_name='get_owner')
+    Owner = serializers.SerializerMethodField(method_name='get_owner')
+    StorageClass = serializers.SerializerMethodField(method_name='get_storage_class')
+
+    @staticmethod
+    def get_upload_id(up):
+        return up.id
+
+    @staticmethod
+    def get_key(up):
+        return up.obj_key
+
+    @staticmethod
+    def get_initiated(up):
+        t = up.create_time
+        return serializers.DateTimeField(default_timezone=utc).to_representation(t)
+
+    @staticmethod
+    def get_storage_class(up):
+        return 'STANDARD'
+
+    def get_owner(self, up):
+        owner = self.context.get('owner', None)
+        if owner is not None:
+            return owner
+
+        user = self.context.get('user', None)
+        owner = {}
+        if user:
+            owner = {'ID': user.id, "DisplayName": user.username}
+
+        self.context['owner'] = owner
+        return owner

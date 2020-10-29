@@ -149,10 +149,18 @@ class S3InvalidDigest(S3Error):
     default_status_code = 400
 
 
+class S3InvalidContentSha256Digest(S3InvalidDigest):
+    default_message = 'You must provide the "X-Amz-Content-SHA256" HTTP header.'
+
+
 class S3BadDigest(S3Error):
     default_message = 'The Content-MD5 you specified did not match what we received.'
     default_code = 'BadDigest'
     default_status_code = 400
+
+
+class S3BadContentSha256Digest(S3BadDigest):
+    default_message = 'The "x-amz-content-sha256" you specified did not match what we received.'
 
 
 class S3InvalidPart(S3Error):

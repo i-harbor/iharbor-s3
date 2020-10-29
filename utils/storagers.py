@@ -5,7 +5,7 @@ from django.core.exceptions import RequestDataTooBig
 from django.utils.translation import gettext
 
 from utils.oss.pyrados import HarborObject, FileWrapper, RadosError, ObjectPart
-from utils.md5 import FileMD5Handler
+from utils.md5 import FileMD5Handler, Sha256Handler
 
 
 class ParseDecodeBase64Error(Exception):
@@ -105,6 +105,7 @@ class CephUploadFile(UploadedFile):
         self.field_name = field_name
         self.file_md5 = file_md5
         self.md5_handler = md5_handler
+        self.sha256_handler = None
 
     def open(self, mode=None):
         self.file.seek(0)
@@ -195,6 +196,11 @@ class PartUploadToCephHandler(FileUploadToCephHandler):
     def __init__(self, request=None, pool_name='', part_key=''):
         self.part_key = part_key
         super().__init__(request=request, pool_name=pool_name, obj_key=part_key)
+        amz_content_sha256 = self.request.headers.get('X-Amz-Content-SHA256', None)
+        if amz_content_sha256 and amz_content_sha256 != 'UNSIGNED-PAYLOAD':
+            self.file_sha256_handler = Sha256Handler()
+        else:
+            self.file_sha256_handler = None
 
     def new_file(self, *args, **kwargs):
         """
@@ -204,4 +210,15 @@ class PartUploadToCephHandler(FileUploadToCephHandler):
         self.file = FileWrapper(ObjectPart(pool_name=self.pool_name, part_key=self.part_key))
         self.file_md5_handler = FileMD5Handler()
 
+    def receive_data_chunk(self, raw_data, start):
+        """
+        :raises: RadosError
+        """
+        super().receive_data_chunk(raw_data=raw_data, start=start)
+        if self.file_sha256_handler is not None:
+            self.file_sha256_handler.update(offset=start, data=raw_data)
 
+    def file_complete(self, file_size):
+        f = super().file_complete(file_size)
+        f.sha256_handler = self.file_sha256_handler
+        return f

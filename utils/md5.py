@@ -19,17 +19,17 @@ def from_b64(s: str):
     return bs.decode("utf-8")
 
 
-class FileMD5Handler:
+class FileHashHandlerBase:
     """
-    MD5计算
+    hash计算
     """
     def __init__(self):
-        self.md5_hash = hashlib.md5()
+        self.hash = None
         self.start_offset = 0       # 下次输入数据开始偏移量
         self.is_valid = True
 
     def __getattr__(self, item):
-        return getattr(self.md5_hash, item)
+        return getattr(self.hash, item)
 
     def update(self, offset: int, data: bytes):
         """
@@ -49,7 +49,7 @@ class FileMD5Handler:
 
         start_offset = self.start_offset
         if start_offset == offset:
-            self.md5_hash.update(data)
+            self.hash.update(data)
             self.start_offset = start_offset + data_len
             return
         elif start_offset < offset:    # 计算无效
@@ -61,18 +61,33 @@ class FileMD5Handler:
             return
 
         cut_len = will_offset - start_offset
-        self.md5_hash.update(data[-cut_len:])   # 输入start_offset开始的部分数据
+        self.hash.update(data[-cut_len:])   # 输入start_offset开始的部分数据
         self.start_offset = will_offset
+
+    def set_invalid(self):
+        self.is_valid = True
+
+
+class FileMD5Handler(FileHashHandlerBase):
+    """
+    MD5计算
+    """
+    def __init__(self):
+        super().__init__()
+        self.hash = hashlib.md5()
 
     @property
     def hex_md5(self):
         if self.is_valid:
-            return self.md5_hash.hexdigest()
+            return self.hash.hexdigest()
 
         return ''
 
-    def set_invalid(self):
-        self.is_valid = True
+
+class Sha256Handler(FileHashHandlerBase):
+    def __init__(self):
+        super().__init__()
+        self.hash = hashlib.sha256()
 
 
 def chunks(fd, chunk_size=10*1024**2):

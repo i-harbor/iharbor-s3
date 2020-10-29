@@ -149,6 +149,27 @@ class MultipartUploadManager:
         except Exception as e:
             raise exceptions.S3InternalError(extend_msg=str(e))
 
+    def list_multipart_uploads_queryset(self, bucket_name: str, prefix: str = None, delimiter: str = None):
+        """
+        查询多部分上传记录
+
+        :param bucket_name: 桶名
+        :param prefix: prefix of s3 object key
+        :param delimiter: 暂时不支持
+        :return:
+            Queryset()
+
+        :raises: S3Error
+        """
+        lookups = {}
+        if prefix:
+            lookups['obj_key__startswith'] = prefix
+
+        try:
+            return MultipartUpload.objects.filter(bucket_name=bucket_name, **lookups).order_by('-create_time').all()
+        except Exception as e:
+            raise exceptions.S3InternalError(extend_msg=str(e))
+
     def get_multipart_upload_delete_invalid(self, bucket, obj_path: str):
         """
         获取上传记录，顺便删除无效的上传记录
