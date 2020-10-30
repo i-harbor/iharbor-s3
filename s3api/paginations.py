@@ -195,7 +195,7 @@ class ListObjectsV2CursorPagination(CursorPagination):
 
 class ListUploadsCursorPagination(CursorPagination):
     """
-    分页器
+    按时间倒序
     """
     cursor_query_param = 'key-marker'
     cursor_query_description = 'The pagination key-marker value.'
@@ -282,12 +282,16 @@ class ListUploadsCursorPagination(CursorPagination):
                 else:
                     raise exceptions.S3NoSuchUpload('key-marker upload not found.')
 
-        order = self.ordering[0]
-        is_reversed = order.startswith('-')
-        if is_reversed:  # 倒序
-            reverse = False
-        else:
-            reverse = True
+        return Cursor(offset=0, reverse=False, position=position)
 
-        return Cursor(offset=0, reverse=reverse, position=position)
 
+class ListUploadsKeyPagination(ListUploadsCursorPagination):
+    """
+    按Key排序
+    """
+    ordering = 'obj_key'
+
+    def decode_cursor(self, request):
+        key_marker = self.get_key_marker(request)
+        position = key_marker if key_marker else None
+        return Cursor(offset=0, reverse=False, position=position)

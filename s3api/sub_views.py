@@ -366,7 +366,7 @@ class BucketViewSet(CustomGenericViewSet):
                 return self.exception_response(request, exceptions.S3AccessDenied())
 
         queryset = MultipartUploadManager().list_multipart_uploads_queryset(bucket_name=bucket_name, prefix=prefix)
-        paginator = paginations.ListUploadsCursorPagination(context={'bucket': bucket})
+        paginator = paginations.ListUploadsKeyPagination(context={'bucket': bucket})
 
         ret_data = {
             'Name': bucket_name,
