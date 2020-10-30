@@ -14,7 +14,6 @@ from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
-from s3api.managers import MultipartUploadManager
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
@@ -369,7 +368,7 @@ class BucketViewSet(CustomGenericViewSet):
         paginator = paginations.ListUploadsKeyPagination(context={'bucket': bucket})
 
         ret_data = {
-            'Name': bucket_name,
+            'Bucket': bucket_name,
             'Prefix': prefix
         }
         if encoding_type:
