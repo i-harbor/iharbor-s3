@@ -970,7 +970,8 @@ class ObjViewSet(CustomGenericViewSet):
         try:
             upload = mu_mgr.get_multipart_upload_delete_invalid(bucket=bucket, obj_path=obj_path_name)
             if upload and upload.is_composing():   # 正在组合对象，不允许操作
-                return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
+                # return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
+                upload.set_uploading()
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
@@ -1063,7 +1064,7 @@ class ObjViewSet(CustomGenericViewSet):
             clean_put(uploader)
             return self.exception_response(request, exceptions.S3InvalidRequest(extend_msg=str(exc)))
 
-        return Response(status=status.HTTP_200_OK, headers={'ETag': part.part_md5})
+        return Response(status=status.HTTP_200_OK, headers={'ETag': f'"{part.part_md5}"'})
 
     def upload_part_handle_save(self, request, bucket, upload, part_number: int):
         """
@@ -1402,7 +1403,9 @@ class ObjViewSet(CustomGenericViewSet):
                 if part.size < MULTIPART_UPLOAD_MIN_SIZE and num != last_part_number:  # part最小限制，最后一个part除外
                     raise exceptions.S3EntityTooSmall()
 
-                if c_part["ETag"] != part.part_md5:
+                if 'ETag' not in c_part:
+                    raise exceptions.S3InvalidPart(extend_msg=f'PartNumber={num}')
+                if c_part["ETag"].strip('"') != part.part_md5:
                     raise exceptions.S3InvalidPart(extend_msg=f'PartNumber={num}')
 
                 obj_etag_handler.update(part.part_md5)
