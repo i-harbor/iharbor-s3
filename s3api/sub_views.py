@@ -1421,7 +1421,7 @@ class ObjViewSet(CustomGenericViewSet):
     def abort_multipart_upload(self, request, upload_id: str):
         bucket_name = self.get_bucket_name(request)
 
-        if len(upload_id) < 64:
+        if not upload_id:
             return self.exception_response(request, exceptions.S3NoSuchUpload())
 
         try:
