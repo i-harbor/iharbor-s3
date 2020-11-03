@@ -47,8 +47,9 @@ class S3V4Authentication(BaseAuthentication):
                 raise exceptions.S3CredentialsNotSupported()
 
             return self.authenticate_credentials(request, credentials)
-        except Exception as e:
-            debug_logger.debug(f'authenticate failed:{str(e)};headers={request.headers};query params={request.query_params}')
+        except exceptions.S3Error as e:
+            debug_logger.debug(f'authenticate failed:{str(e)};headers={request.headers};path={request.path};query params={request.query_params}')
+            raise e
 
     def get_credentials_from_header(self, request):
         """
