@@ -1,4 +1,5 @@
 import hmac
+import logging
 from hashlib import sha256
 from urllib.parse import quote
 from datetime import datetime
@@ -6,6 +7,9 @@ from datetime import datetime
 from django.utils.translation import gettext as _
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
 from . import exceptions
+
+
+debug_logger = logging.getLogger('debug')
 
 
 AWS4_HMAC_SHA256 = 'AWS4-HMAC-SHA256'
@@ -34,14 +38,17 @@ class S3V4Authentication(BaseAuthentication):
         return AuthKey
 
     def authenticate(self, request):
-        credentials = self.get_credentials_from_header(request)
-        if credentials is None:
-            credentials = self.get_credentials_from_query(request)
+        try:
+            credentials = self.get_credentials_from_header(request)
+            if credentials is None:
+                credentials = self.get_credentials_from_query(request)
 
-        if credentials is None:
-            raise exceptions.S3CredentialsNotSupported()
+            if credentials is None:
+                raise exceptions.S3CredentialsNotSupported()
 
-        return self.authenticate_credentials(request, credentials)
+            return self.authenticate_credentials(request, credentials)
+        except Exception as e:
+            debug_logger.debug(f'authenticate failed:{str(e)};headers={request.headers};query params={request.query_params}')
 
     def get_credentials_from_header(self, request):
         """
