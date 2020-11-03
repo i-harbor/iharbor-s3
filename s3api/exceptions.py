@@ -292,3 +292,8 @@ class S3NotS3Bucket(S3Error):
     default_code = 'NotS3Bucket'
     default_status_code = 304
 
+
+class S3NotImplemented(S3Error):
+    default_message = "Not implemented."
+    default_code = 'NotImplemented'
+    default_status_code = 501

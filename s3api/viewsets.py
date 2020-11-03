@@ -22,34 +22,28 @@ def exception_handler(exc, context):
     Any unhandled exceptions may return `None`, which will cause a 500 error
     to be raised.
     """
+    if isinstance(exc, exceptions.S3Error):
+        set_rollback()
+        return Response(exc.err_data(), status=exc.status_code)
+
     if isinstance(exc, Http404):
         exc = exceptions.S3NotFound()
     elif isinstance(exc, PermissionDenied):
         exc = exceptions.S3AccessDenied()
     elif isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
         exc = exceptions.S3AccessDenied()
-
-    if isinstance(exc, APIException):
-        headers = {}
-        if getattr(exc, 'auth_header', None):
-            headers['WWW-Authenticate'] = exc.auth_header
-        if getattr(exc, 'wait', None):
-            headers['Retry-After'] = '%d' % exc.wait
-
+    elif isinstance(exc, APIException):
         if isinstance(exc.detail, (list, dict)):
             data = exc.detail
         else:
             data = {'detail': exc.detail}
 
-        e = exceptions.S3Error(message=str(data), status_code=exc.status_code, code=exc.default_code)
-        set_rollback()
-        return Response(e.err_data(), status=e.status_code, headers=headers)
+        exc = exceptions.S3Error(message=str(data), status_code=exc.status_code, code=exc.default_code)
+    else:
+        return None
 
-    if isinstance(exc, exceptions.S3Error):
-        set_rollback()
-        return Response(exc.err_data(), status=exc.status_code)
-
-    return None
+    set_rollback()
+    return Response(exc.err_data(), status=exc.status_code)
 
 
 class CustomGenericViewSet(GenericViewSet):

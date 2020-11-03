@@ -460,6 +460,15 @@ class ObjViewSet(CustomGenericViewSet):
         create dir
         upload part
         """
+        if any(['aws-chunked' in request.headers.get('content-encoding', ''),
+                'STREAMING-AWS4-HMAC-SHA256-PAYLOAD' == request.headers.get('x-amz-content-sha256', ''),
+                'x-amz-decoded-content-length' in request.headers]):
+            return self.exception_response(request, exc=exceptions.S3NotImplemented(
+                'Transfering payloads in multiple chunks using aws-chunked is not supported.'))
+
+        if 'x-amz-tagging' in request.headers:
+            return self.exception_response(request, exc=exceptions.S3NotImplemented('Object tagging is not supported.'))
+
         key = self.get_s3_obj_key(request)
         content_length = request.headers.get('Content-Length', None)
         if not content_length:

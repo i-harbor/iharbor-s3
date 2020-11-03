@@ -39,7 +39,7 @@ class S3V4Authentication(BaseAuthentication):
             credentials = self.get_credentials_from_query(request)
 
         if credentials is None:
-            return None
+            raise exceptions.S3CredentialsNotSupported()
 
         return self.authenticate_credentials(request, credentials)
 
@@ -55,16 +55,19 @@ class S3V4Authentication(BaseAuthentication):
             return None
 
         if len(auth) == 1:
-            msg = _('Invalid authorization header. No credentials provided.')
-            raise exceptions.S3AuthorizationHeaderMalformed(msg)
+            raise exceptions.S3CredentialsNotSupported()
 
         try:
             auth_key_str = auth[1].decode()
         except UnicodeError:
-            msg = _('Invalid authorization header. Auth string should not contain invalid characters.')
-            raise exceptions.S3AuthorizationHeaderMalformed(msg)
+            msg = _('Auth string should not contain invalid characters.')
+            raise exceptions.S3InvalidSecurity(extend_msg=msg)
 
         self.s3_timestamp = self.get_timestamp_from_header(request)
+        if not self.s3_timestamp:
+            msg = _('Authorization failed, No header "X-Amz-Date" or "Date" provided.')
+            raise exceptions.S3AuthorizationHeaderMalformed(msg)
+
         return self.parse_auth_key_string(auth_key_str)
 
     def get_credentials_from_query(self, request):
@@ -78,39 +81,37 @@ class S3V4Authentication(BaseAuthentication):
             return None
 
         if algorithm != 'AWS4-HMAC-SHA256':
-            raise exceptions.S3AuthorizationHeaderMalformed()
+            msg = 'The query param "X-Amz-Algorithm" must be "AWS4-HMAC-SHA256"'
+            raise exceptions.S3InvalidSecurity(extend_msg=msg)
 
         self.s3_timestamp = self.get_timestamp_from_query(request)
+        if not self.s3_timestamp:
+            msg = _('No query param "X-Amz-Date" provided.')
+            raise exceptions.S3InvalidSecurity(extend_msg=msg)
 
         # 检查认证凭据是否过期, 最长七天
         expires = int(request.query_params.get('X-Amz-Expires', 86400))  # 86400(24h), 最大604800(7days)
         if not (1 <= expires <= 86400):
-            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of param "Expires".')
+            raise exceptions.S3InvalidSecurity(extend_msg='invalid value of param "Expires".')
 
         now_tsp = datetime.utcnow().timestamp()
         expires_tsp = self.s3_datetime.timestamp() + expires
         if expires_tsp < now_tsp:
-            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='expires')
+            raise exceptions.S3InvalidSecurity(extend_msg='expires')
 
         credential = request.query_params.get('X-Amz-Credential', '')
         signature = request.query_params.get('X-Amz-Signature', '')
         if not credential:
-            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of query param "X-Amz-Credential".')
+            raise exceptions.S3InvalidSecurity(extend_msg='invalid value of query param "X-Amz-Credential".')
 
         if not signature:
-            raise exceptions.S3AuthorizationHeaderMalformed(extend_msg='invalid value of query param "X-Amz-Signature".')
+            raise exceptions.S3InvalidSecurity(extend_msg='invalid value of query param "X-Amz-Signature".')
 
         return {
             'Credential': credential,
             'SignedHeaders': request.query_params.get('X-Amz-SignedHeaders', ''),
             'Signature': signature
         }
-
-    def check_expires(self, ):
-        """
-        检查认证凭据是否过期
-        :return:
-        """
 
     def authenticate_credentials(self, request, credentials):
         credential = credentials.get('Credential')
@@ -120,7 +121,11 @@ class S3V4Authentication(BaseAuthentication):
         self.s3_credential = credential
         self.s3_signed_headers = signed_headers
 
-        access_key, date, self._region_name, self._service_name, *arg = credential.split('/')
+        l_credential = credential.split('/')
+        if len(l_credential) < 4:
+            raise exceptions.S3InvalidSecurity(extend_msg='invalid format "Credential"')
+
+        access_key, date, self._region_name, self._service_name, *arg = l_credential
         model = self.get_model()
         try:
             auth_key = model.objects.select_related('user').get(id=access_key)
@@ -137,7 +142,7 @@ class S3V4Authentication(BaseAuthentication):
         # 验证加密signature
         sig = self.generate_signature(request=request, signed_headers=signed_headers, secret_key=auth_key.secret_key)
         if sig != signature:
-            raise exceptions.S3AuthorizationHeaderMalformed()
+            raise exceptions.S3SignatureDoesNotMatch(extend_msg=f'{sig} != {signature}')
 
         return auth_key.user, auth_key  # request.user, request.auth
 
@@ -145,14 +150,14 @@ class S3V4Authentication(BaseAuthentication):
     def parse_auth_key_string(auth_key):
         auth = auth_key.split(',')
         if len(auth) != 3:
-            raise exceptions.S3AuthorizationHeaderMalformed()
+            raise exceptions.S3InvalidSecurity(extend_msg='length is not 3 split by ","')
 
         ret = {}
         for a in auth:
             a = a.strip(' ')
             name, val = a.split('=', maxsplit=1)
             if name not in ['Credential', 'SignedHeaders', 'Signature']:
-                raise exceptions.S3AuthorizationHeaderMalformed()
+                raise exceptions.S3InvalidSecurity(extend_msg='key must be in ("Credential", "SignedHeaders", "Signature")')
             ret[name] = val
 
         return ret
@@ -165,8 +170,10 @@ class S3V4Authentication(BaseAuthentication):
             canonical_request = self.canonical_request(request, signed_headers)
             string_to_sign = self.string_to_sign(canonical_request)
             return self.signature(string_to_sign, secret_key)
+        except exceptions.S3Error as e:
+            raise e
         except Exception as e:
-            raise exceptions.S3AuthorizationHeaderMalformed()
+            raise exceptions.S3InternalError(f'An error occurred while calculating the signature, {str(e)}')
 
     def canonical_headers(self, request, signed_headers: str):
         """
@@ -179,6 +186,9 @@ class S3V4Authentication(BaseAuthentication):
         sorted_header_names = signed_headers.split(';')
         for key in sorted_header_names:
             v = request.headers.get(key)
+            if not v:
+                raise exceptions.S3InvalidSecurity(extend_msg=f'The header "{key}" was not provided.')
+
             value = ','.join([self._header_value(v)])
             headers.append('%s:%s' % (key, value))
         return '\n'.join(headers)
@@ -236,17 +246,17 @@ class S3V4Authentication(BaseAuthentication):
 
     def get_timestamp_from_header(self, request):
         headers = request.headers
-        t = headers.get('Date', None)
-        if t is not None:
-            dt = datetime.strptime(t, GMT_FORMAT)
-            self.s3_datetime = dt
-            return dt.strftime(SIGV4_TIMESTAMP)
-
         t = headers.get('X-Amz-Date', None)
         if t is not None:
             dt = datetime.strptime(t, SIGV4_TIMESTAMP)
             self.s3_datetime = dt
             return t
+
+        t = headers.get('Date', None)
+        if t is not None:
+            dt = datetime.strptime(t, GMT_FORMAT)
+            self.s3_datetime = dt
+            return dt.strftime(SIGV4_TIMESTAMP)
 
         return ''
 
