@@ -38,6 +38,15 @@ class S3V4Authentication(BaseAuthentication):
         return AuthKey
 
     def authenticate(self, request):
+        if any(['aws-chunked' in request.headers.get('content-encoding', ''),
+                'STREAMING-AWS4-HMAC-SHA256-PAYLOAD' == request.headers.get('x-amz-content-sha256', ''),
+                'x-amz-decoded-content-length' in request.headers]):
+            raise exceptions.S3NotImplemented(
+                'Transfering payloads in multiple chunks using aws-chunked is not supported.')
+
+        if 'x-amz-tagging' in request.headers:
+            raise exceptions.S3NotImplemented('Object tagging is not supported.')
+
         try:
             credentials = self.get_credentials_from_header(request)
             if credentials is None:
