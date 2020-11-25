@@ -99,9 +99,10 @@ class CommonXMLRenderer(BaseRenderer):
     """
     media_type = "application/xml"
 
-    def __init__(self, root_tag_name: str = 'root'):
+    def __init__(self, root_tag_name: str = 'root', with_xml_declaration=True):
         self.root_tag_name = root_tag_name
         self.item_tag_name = 'item_tag_name'
+        self.with_xml_declaration = with_xml_declaration
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
         """
@@ -113,7 +114,9 @@ class CommonXMLRenderer(BaseRenderer):
         stream = StringIO()
 
         xml = SimplerXMLGenerator(stream, self.charset)
-        xml.startDocument()
+        if self.with_xml_declaration:
+            xml.startDocument()
+
         xml.startElement(self.root_tag_name, {})
         self._to_xml(xml, data)
         xml.endElement(self.root_tag_name)

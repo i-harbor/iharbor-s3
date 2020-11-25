@@ -1,4 +1,4 @@
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from rest_framework_xml.renderers import XMLRenderer
 
 
@@ -24,3 +24,16 @@ class XMLResponse(HttpResponse):
         kwargs.setdefault('content_type', 'application/xml')
         data = encoder().render(data=data)
         super().__init__(content=data, **kwargs)
+
+
+class IterResponse(StreamingHttpResponse):
+    """
+    响应返回数据是迭代器
+    """
+    def __init__(self, iter_content, **kwargs):
+        super().__init__(**kwargs)
+        self.iter_content = iter_content
+
+    def __iter__(self):
+        return self.iter_content
+

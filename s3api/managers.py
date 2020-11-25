@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.apps import apps
-from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+from django.core.exceptions import MultipleObjectsReturned
+from django.utils import timezone
 
-from utils.md5 import to_b64, from_b64, get_str_hexMD5
+from utils.md5 import get_str_hexMD5
 from s3api.models import ObjectPartBase, MultipartUpload
 from . import exceptions
 
@@ -53,7 +54,7 @@ def create_multipart_upload_task(bucket, obj_key: str, obj_perms_code: int, obj_
     :raises: S3Error
     """
     if expire_time is None:
-        expire_time = datetime.now() + timedelta(days=30)  # 默认一个月到期
+        expire_time = timezone.now() + timedelta(days=30)  # 默认一个月到期
 
     try:
         upload = MultipartUpload(bucket_id=bucket.id, bucket_name=bucket.name, obj_id=obj_id,

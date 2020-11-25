@@ -5,8 +5,6 @@ from collections import OrderedDict
 from django.utils.translation import gettext
 from django.http import FileResponse
 from django.utils.http import urlquote
-from django.conf import settings
-from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.serializers import ValidationError
@@ -22,8 +20,8 @@ from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_f
 from . import exceptions
 from .harbor import HarborManager
 from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
-from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler, S3ObjectMultipartETagHandler
-from utils.oss.pyrados import HarborObject, RadosError, ObjectPart
+from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
+from utils.oss.pyrados import HarborObject, RadosError
 from utils.time import datetime_from_gmt
 from buckets.models import BucketFileBase
 from . import serializers
@@ -32,10 +30,8 @@ from .managers import (get_parts_model_class, MultipartUploadManager, ObjectPart
 from .negotiation import CusContentNegotiation
 from . import parsers
 from .models import build_part_rados_key
-
-
-MULTIPART_UPLOAD_MAX_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MAX_SIZE', 2 * 1024 ** 3)        # default 2GB
-MULTIPART_UPLOAD_MIN_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MIN_SIZE', 5 * 1024 ** 2)        # default 5MB
+from .handlers import MULTIPART_UPLOAD_MAX_SIZE
+from . import handlers
 
 
 class BucketViewSet(CustomGenericViewSet):
@@ -1143,7 +1139,8 @@ class ObjViewSet(CustomGenericViewSet):
 
         return upload, bucket
 
-    def handle_validate_complete_parts(self, parts: list):
+    @staticmethod
+    def handle_validate_complete_parts(parts: list):
         """
         检查对象part列表是否是升序排列, 是否有效（1-10000）
         :return: parts_dict, numbers
@@ -1204,221 +1201,9 @@ class ObjViewSet(CustomGenericViewSet):
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        if upload.is_completed():          # 已完成的上传任务，删除任务记录
-            upload.safe_delete()
-            return self.exception_response(request, exceptions.S3NoSuchUpload())
-
-        if upload.is_composing():             # 已经正在组合对象，不能重复组合
-            return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
-
-        if not upload.set_composing():      # 设置正在组合对象
-            return self.exception_response(request, exceptions.S3InternalError())
-
-        try:
-            obj, etag = self.complete_multipart_upload_handle(
-                request=request, bucket=bucket, upload=upload, complete_parts=complete_parts_dict,
-                complete_numbers=complete_part_numbers)
-        except exceptions.S3Error as e:
-            upload.set_uploading()          # 发生错误，设置回正在上传
-            return self.exception_response(request, e)
-        except Exception as e:
-            upload.set_uploading()          # 发生错误，设置回正在上传
-            return self.exception_response(request, exceptions.S3InternalError())
-
-        location = request.build_absolute_uri()
-        self.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CompleteMultipartUploadResult'))
-        return Response(data={'Location': location, 'Bucket': bucket.name, 'Key': obj_path_name, 'ETag': etag})
-
-    def complete_multipart_upload_handle(self, request, bucket, upload, complete_parts, complete_numbers):
-        """
-        完成多部分上传处理
-
-        :param request:
-        :param bucket:
-        :param upload: 多部分上传任务实例
-        :param complete_parts: 请求要组合的part信息字典
-        :param complete_numbers: 请求要组合的所有part的PartNumber list
-        :return: obj, ETag
-        :raises: S3Error
-        """
-        obj_path_name = self.get_s3_obj_key(request)
-        hm = HarborManager()
-        obj, created = hm.get_or_create_obj(table_name=bucket.get_bucket_table_name(), obj_path_name=obj_path_name)
-
-        obj_raods_key = obj.get_obj_key(bucket.id)
-        obj_rados = HarborObject(pool_name=bucket.pool_name, obj_id=obj_raods_key, obj_size=obj.si)
-        if not created and obj.si != 0:     # 已存在的非空对象
-            try:
-                hm._pre_reset_upload(bucket=bucket, obj=obj, rados=obj_rados)  # 重置对象大小
-            except Exception as exc:
-                raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
-
-        # 获取需要组合的所有part元数据和对象ETag，和没有用到的part元数据列表
-        used_upload_parts, unused_upload_parts, obj_etag = self.get_upload_parts_and_validate(bucket=bucket,
-            upload=upload, complete_parts=complete_parts, complete_numbers=complete_numbers)
-
-        # 所有part rados数据组合对象rados
-        md5_handler = FileMD5Handler()
-        offset = 0
-        parts_count = len(complete_numbers)
-        for num in complete_numbers:
-            part = used_upload_parts[num]
-            self.save_part_to_object(obj=obj, obj_rados=obj_rados, offset=offset, part=part,
-                                     md5_handler=md5_handler, obj_etag=obj_etag, parts_count=parts_count)
-
-            offset = offset + part.size
-
-        # 更新对象元数据
-        if not self.update_obj_metedata(obj=obj, size=offset, hex_md5=md5_handler.hex_md5,
-                                        share_code=upload.obj_perms_code):
-            raise exceptions.S3InternalError(extend_msg='update object metadata error.')
-
-        # 多部分上传已完成，清理数据
-        self.clear_parts_cache(unused_upload_parts, is_rm_metadata=True)    # 删除无用的part元数据和rados数据
-        self.clear_parts_cache(used_upload_parts, is_rm_metadata=False)     # 删除已组合的rados数据, 保留part元数据
-
-        # 删除多部分上传upload任务
-        if not upload.safe_delete():
-            if not upload.safe_delete():
-                upload.set_completed()      # 删除失败，尝试标记已上传完成
-
-        return obj, obj_etag
-
-    def clear_parts_cache(self, parts, is_rm_metadata=False):
-        """
-        清理part缓存，part rados数据或元数据
-
-        :param parts: part元数据实例list或dict
-        :param is_rm_metadata: True(删除元数据)；False(不删元数据)
-        :return:
-            True, []
-            False, [part]      # 第二个返回值是删除失败的part元数据list
-        """
-        if isinstance(parts, dict):
-            parts = parts.values()
-
-        remove_failed_parts = []        # 删除元数据失败的part
-        part_rados = ObjectPart(part_key='', part_size=0)
-        for p in parts:
-            if is_rm_metadata:
-                if not p.safe_delete():
-                    if not p.safe_delete():     # 重试一次
-                        remove_failed_parts.append(p)
-
-            part_rados.reset_part_key_and_size(part_key=p.get_part_rados_key(), part_size=p.size)
-            ok, _ = part_rados.delete()
-            if not ok:
-                part_rados.delete()     # 重试一次
-
-        if remove_failed_parts:
-            return False, remove_failed_parts
-
-        return True, []
-
-    def update_obj_metedata(self, obj, size, hex_md5: str, share_code):
-        """
-        :return:
-            True
-            False
-        """
-        obj.si = size
-        obj.md5 = hex_md5
-        obj.upt = timezone.now()
-        obj.share = share_code
-        obj.stl = False  # 永久共享,没有共享时间限制
-        try:
-            obj.save(update_fields=['si', 'md5', 'upt', 'stl', 'share'])
-        except Exception as e:
-            return False
-
-        return True
-
-    def save_part_to_object(self, obj, obj_rados, offset, part, md5_handler, obj_etag: str, parts_count: int):
-        """
-        把一个part数据写入对象
-
-        :param obj: 对象元数据实例
-        :param obj_rados: 对象rados实例
-        :param offset: part数据写入对象的偏移量
-        :param part: part元数据实例
-        :param md5_handler: 对象md5计算
-        :param obj_etag: 对象的ETag
-        :param parts_count: 对象part总数
-        :return:
-
-        :raises: S3Error
-        """
-        part.obj_offset = offset
-        part.obj_etag = obj_etag
-        part.obj_id = obj.id
-        part.parts_count = parts_count
-
-        part_rados = ObjectPart(part_key=part.get_part_rados_key(), part_size=part.size)
-        generator = part_rados.read_obj_generator()
-        for data in generator:
-            if not data:
-                break
-
-            ok, msg = obj_rados.write(offset=offset, data_block=data)
-            if not ok:
-                ok, msg = obj_rados.write(offset=offset, data_block=data)
-
-            if not ok:
-                raise exceptions.S3InternalError(extend_msg=msg)
-
-            md5_handler.update(offset=offset, data=data)
-            offset = offset + len(data)
-
-        try:
-            part.save(update_fields=['obj_offset', 'obj_etag', 'obj_id', 'parts_count'])
-        except Exception as e:
-            raise exceptions.S3InternalError()
-
-    def get_upload_parts_and_validate(self, bucket, upload, complete_parts, complete_numbers):
-        """
-        多部分上传part元数据获取和验证
-
-        :param upload: 上传任务实例
-        :param complete_parts:  客户端请求组合提交的part信息，dict
-        :param complete_numbers: 客户端请求组合提交的所有part的编号list，升序
-        :return:
-                (
-                    used_upload_parts: dict,        # complete_parts对应的part元数据实例字典
-                    unused_upload_parts: list,      # 属于同一个多部分上传任务upload的，但不在complete_parts内的part元数据实例列表
-                    object_etag: str                # 对象的ETag
-                )
-        :raises: S3Error
-        """
-        opm = ObjectPartManager(bucket=bucket)
-        upload_parts_qs = opm.get_parts_queryset_by_upload_id(upload_id=upload.id)
-
-        obj_etag_handler = S3ObjectMultipartETagHandler()
-        used_upload_parts = {}
-        unused_upload_parts = []
-        last_part_number = complete_numbers[-1]
-        for part in upload_parts_qs:
-            num = part.part_num
-            if part.part_num in complete_numbers:
-                c_part = complete_parts[num]
-                if part.size < MULTIPART_UPLOAD_MIN_SIZE and num != last_part_number:  # part最小限制，最后一个part除外
-                    raise exceptions.S3EntityTooSmall()
-
-                if 'ETag' not in c_part:
-                    raise exceptions.S3InvalidPart(extend_msg=f'PartNumber={num}')
-                if c_part["ETag"].strip('"') != part.part_md5:
-                    raise exceptions.S3InvalidPart(extend_msg=f'PartNumber={num}')
-
-                obj_etag_handler.update(part.part_md5)
-                used_upload_parts[num] = part
-            else:
-                unused_upload_parts.append(part)
-
-        obj_parts_count = len(used_upload_parts)
-        if obj_parts_count != len(complete_parts):
-            raise exceptions.S3InvalidPart()
-
-        obj_etag = f'"{obj_etag_handler.hex_md5}-{obj_parts_count}"'
-        return used_upload_parts, unused_upload_parts, obj_etag
+        return handlers.MultipartUploadHandler().complete_multipart_upload_handle(
+            request=request, bucket=bucket, upload=upload, key=obj_path_name, complete_parts=complete_parts_dict,
+            complete_numbers=complete_part_numbers)
 
     def abort_multipart_upload(self, request, upload_id: str):
         bucket_name = self.get_bucket_name(request)
@@ -1431,33 +1216,7 @@ class ObjViewSet(CustomGenericViewSet):
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        if upload.is_composing():             # 已经正在组合对象
-            return self.exception_response(request, exceptions.S3CompleteMultipartAlreadyInProgress())
-
-        if upload.is_completed():          # 已完成的上传任务，删除任务记录
-            upload.safe_delete()
-
-            return self.exception_response(request, exceptions.S3NoSuchUpload())
-
-        opm = ObjectPartManager(bucket=bucket)
-        upload_parts_qs = opm.get_parts_queryset_by_upload_id_obj_id(upload_id=upload.id, obj_id=0)
-        upload_parts = list(upload_parts_qs)
-        ok, failed_parts = self.clear_parts_cache(parts=upload_parts, is_rm_metadata=True)
-        if not ok:
-            all_len = len(upload_parts)
-            failed_len = len(failed_parts)
-            if failed_len > (all_len // 2):      # 如果大多数part删除失败，就直接返回500内部错误，让客户端重新请求
-                return self.exception_response(request, exceptions.S3InternalError())
-
-            # 小部分删除失败，重试清除删除失败的part
-            ok, failed_parts = self.clear_parts_cache(parts=failed_parts, is_rm_metadata=True)
-            if not ok:
-                return self.exception_response(request, exceptions.S3InternalError())
-
-        if upload.safe_delete():
-            return Response(status=status.HTTP_204_NO_CONTENT)
-
-        return self.exception_response(request, exceptions.S3InternalError())
+        return handlers.MultipartUploadHandler().abort_multipart_upload(request=request, upload=upload, bucket=bucket)
 
     def head_object(self, request, *args, **kwargs):
         bucket_name = self.get_bucket_name(request)

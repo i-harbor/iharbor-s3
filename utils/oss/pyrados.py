@@ -215,20 +215,30 @@ class RadosAPI:
         self.clear_cluster()
 
     def get_cluster(self):
-        '''
+        """
         获取已连接到ceph集群的句柄handle
         :return:
             failed: None
             success: Rados()
         :raises: class:`RadosError`
-        '''
+        """
+        if self._cluster:
+            if self._cluster.state.lower() == 'connected':
+                return self._cluster
+            else:
+                self._cluster.shutdown()
+                self._cluster = None
+
         if not self._cluster:
-            conf = dict(keyring=self._keyring_file) if self._keyring_file else None
+            conf = {'client_mount_timeout': '15', 'rados_mon_op_timeout': '15', 'rados_osd_op_timeout': '15'}
+            if self._keyring_file:
+                conf['keyring'] = self._keyring_file
             self._cluster = rados.Rados(name=self._user_name, clustername=self._cluster_name, conffile=self._conf_file,
                                         conf=conf)
             try:
-                self._cluster.connect(timeout=5)
+                self._cluster.connect()
             except rados.Error as e:
+                self._cluster = None
                 msg = e.args[0] if e.args else 'error connecting to the cluster'
                 raise RadosError(msg, errno=e.errno)
 
