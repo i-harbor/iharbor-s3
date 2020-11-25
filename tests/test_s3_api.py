@@ -415,6 +415,34 @@ def test_delete_objects(s3, bucket_name, keys: list):
 def test_abort_multipart_upload(s3, bucket_name, key, filename, part_size):
     upload_id, parts = multipart_upload_object_not_complete(s3=s3, bucket=bucket_name, object_key=key,
                                                             filename=filename, part_size=part_size)
+
+    prefix = key.rsplit('/', maxsplit=1)[0]
+    try:
+        r = s3.list_multipart_uploads(
+            Bucket=bucket_name,
+            # Delimiter='/',
+            EncodingType='url',
+            # KeyMarker='a/b/1.txt',
+            MaxUploads=66,
+            Prefix=prefix,
+            # UploadIdMarker='',
+        )
+    except ClientError as e:
+        print(f'@@@ [Failed], test_list_multipart_upload, {str(e)}')
+    else:
+        uploads = r.get('Uploads', [])
+        is_get = ''
+        for up in uploads:
+            if up.get('Key') == key:
+                up_id = up.get('UploadId', '')
+                if upload_id == up_id:
+                    is_get = up_id
+                    break
+        if is_get:
+            print(f'@@@ [OK], test_list_multipart_upload, get UploadId={is_get}')
+        else:
+            print(f'@@@ [OK], test_list_multipart_upload, not found UploadId')
+
     try:
         r = abort_multipart_upload(s3=s3, bucket=bucket_name, object_key=key, upload_id=upload_id)
     except ClientError as e:
