@@ -154,6 +154,7 @@ class HarborManager:
             raise exceptions.S3InternalError(str(e))
         if obj:
             return obj
+
         return None
 
     def _get_obj_or_dir_and_bfm(self, table_name, path, name):
@@ -1171,10 +1172,9 @@ class HarborManager:
             else:
                 key_is_dir = False
 
-            path, filename = PathParser(filepath=obj_key).get_path_and_filename()
             try:
                 try:
-                    obj = self._get_obj_or_dir(table_name=table_name, path=path, name=filename)
+                    obj = self.get_metadata_obj(table_name=table_name, path=obj_key)    # 不检查父路径
                 except Exception as e:
                     if not isinstance(e, exceptions.S3Error):
                         raise exceptions.S3InternalError(f'查询对象元数据错误，{str(e)}')
@@ -1184,7 +1184,11 @@ class HarborManager:
                     raise exceptions.S3NoSuchKey()
 
                 if (key_is_dir and obj.is_dir()) or (not key_is_dir and obj.is_file()):
-                    self.do_delete_obj_or_dir(bucket=bucket, obj=obj)
+                    try:
+                        self.do_delete_obj_or_dir(bucket=bucket, obj=obj)
+                    except exceptions.S3Error as e:
+                        raise e
+
                     deleted_objects.append({"Key": key})
                 else:
                     raise exceptions.S3NoSuchKey()
@@ -1210,6 +1214,10 @@ class HarborManager:
         """
         obj_key = obj.get_obj_key(bucket.id)
         old_id = obj.id
+
+        if obj.is_dir():
+            if not BucketFileManagement(collection_name=bucket.get_bucket_table_name()).dir_is_empty(obj):
+                raise exceptions.S3InvalidRequest('无法删除非空目录')
 
         # 先删除元数据，后删除rados对象（删除失败恢复元数据）
         if not obj.do_delete():
