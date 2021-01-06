@@ -1,6 +1,5 @@
 import binascii
 import os
-import hashlib
 from datetime import timedelta, datetime
 
 from django.db import models

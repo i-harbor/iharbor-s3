@@ -495,7 +495,8 @@ class ObjViewSet(CustomGenericViewSet):
 
     def s3_get_object(self, request, args, kwargs):
         bucket_name = self.get_bucket_name(request)
-        obj_path_name = self.get_obj_path_name(request)
+        s3_obj_key = self.get_s3_obj_key(request)
+        obj_path_name = s3_obj_key.strip('/')
 
         part_number = request.query_params.get('partNumber', None)
         header_range = request.headers.get('range', None)
@@ -505,13 +506,24 @@ class ObjViewSet(CustomGenericViewSet):
         # 存储桶验证和获取桶对象
         hm = HarborManager()
         try:
-            bucket, fileobj = hm.get_bucket_and_obj(bucket_name=bucket_name, obj_path=obj_path_name,
-                                                    user=request.user, all_public=True)
+            bucket, fileobj = hm.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=obj_path_name,
+                                                           user=request.user, all_public=True)
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
         if fileobj is None:
             return self.exception_response(request, exceptions.S3NoSuchKey())
+
+        if s3_obj_key.endswith('/'):  # dir
+            if fileobj.is_file():
+                return self.exception_response(request, exceptions.S3NoSuchKey())
+
+            is_dir = True
+        else:                          # object
+            if not fileobj.is_file():
+                return self.exception_response(request, exceptions.S3NoSuchKey())
+
+            is_dir = False
 
         # 是否有文件对象的访问权限
         try:
@@ -519,7 +531,13 @@ class ObjViewSet(CustomGenericViewSet):
         except exceptions.S3Error as e:
             return self.exception_response(request, e)
 
-        if part_number is not None:
+        if is_dir:
+            if part_number is not None and part_number != '1':
+                return self.exception_response(request,
+                                               exceptions.S3InvalidArgument(message=gettext('无效的参数partNumber.')))
+
+            response = self.s3_get_object_dir(fileobj)
+        elif part_number is not None:
             try:
                 part_number = int(part_number)
                 response = self.s3_get_object_part_response(bucket=bucket, obj=fileobj, part_number=part_number)
@@ -664,6 +682,22 @@ class ObjViewSet(CustomGenericViewSet):
         response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
         response['Content-Type'] = 'binary/octet-stream'  # 注意格式
         response['Content-Disposition'] = f"attachment;filename*=utf-8''{filename}"  # 注意filename 这个是下载后的名字
+        return response
+
+    @staticmethod
+    def s3_get_object_dir(obj):
+        """
+        获取的是一个目录
+        :return:
+            Response()
+        """
+        last_modified = obj.upt if obj.upt else obj.ult
+        response = FileResponse(b'')
+        response['Content-Length'] = 0
+        response['ETag'] = f'"{EMPTY_HEX_MD5}"'
+        response['Last-Modified'] = serializers.time_to_gmt(last_modified)
+        response['Accept-Ranges'] = 'bytes'  # 接受类型，支持断点续传
+        response['Content-Type'] = 'application/x-directory; charset=UTF-8'  # 注意格式, dir
         return response
 
     def get_object_offset_and_end(self, h_range: str, filesize: int):
