@@ -193,7 +193,7 @@ class BucketViewSet(CustomGenericViewSet):
         try:
             bucket.save()
         except Exception as e:
-            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶元数据错误')))
+            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶元数据错误'), extend_msg=str(e)))
 
         col_name = bucket.get_bucket_table_name()
         bfm = BucketFileManagement(collection_name=col_name)
