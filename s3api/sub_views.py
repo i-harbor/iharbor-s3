@@ -12,6 +12,11 @@ from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
+from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
+from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
+from utils.oss.pyrados import HarborObject, RadosError
+from utils.time import datetime_from_gmt
+from buckets.models import BucketFileBase
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
@@ -19,11 +24,6 @@ from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_f
                     delete_table_for_model_class)
 from . import exceptions
 from .harbor import HarborManager
-from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
-from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
-from utils.oss.pyrados import HarborObject, RadosError
-from utils.time import datetime_from_gmt
-from buckets.models import BucketFileBase
 from . import serializers
 from . import paginations
 from .managers import (get_parts_model_class, MultipartUploadManager, ObjectPartManager)
@@ -258,9 +258,9 @@ class BucketViewSet(CustomGenericViewSet):
             objs, _ = paginator.get_objects_and_dirs()
 
             if fetch_owner == 'true':
-                serializer = serializers.ObjectListWithOwnerSerializer(objs, many=True, context={'user': request.user})
+                serializer = serializers.ObjectListV2WithOwnerSerializer(objs, many=True, context={'user': request.user})
             else:
-                serializer = serializers.ObjectListSerializer(objs, many=True)
+                serializer = serializers.ObjectListV2Serializer(objs, many=True)
 
             data = paginator.get_paginated_data(common_prefixes=True, delimiter=delimiter)
             ret_data.update(data)
@@ -273,9 +273,9 @@ class BucketViewSet(CustomGenericViewSet):
             return self.list_objects_v2_no_match(request=request, prefix=prefix, delimiter=delimiter, bucket=bucket)
 
         if fetch_owner == 'true':
-            serializer = serializers.ObjectListWithOwnerSerializer(obj, context={'user': request.user})
+            serializer = serializers.ObjectListV2WithOwnerSerializer(obj, context={'user': request.user})
         else:
-            serializer = serializers.ObjectListSerializer(obj)
+            serializer = serializers.ObjectListV2Serializer(obj)
 
         ret_data['Contents'] = [serializer.data]
         ret_data['KeyCount'] = 1
@@ -298,9 +298,9 @@ class BucketViewSet(CustomGenericViewSet):
         paginator = paginations.ListObjectsV2CursorPagination(context={'bucket': bucket})
         objs_dirs = paginator.paginate_queryset(objs_qs, request=request)
         if fetch_owner == 'true':
-            serializer = serializers.ObjectListWithOwnerSerializer(objs_dirs, many=True, context={'user': request.user})
+            serializer = serializers.ObjectListV2WithOwnerSerializer(objs_dirs, many=True, context={'user': request.user})
         else:
-            serializer = serializers.ObjectListSerializer(objs_dirs, many=True)
+            serializer = serializers.ObjectListV2Serializer(objs_dirs, many=True)
 
         data = paginator.get_paginated_data()
         data['Contents'] = serializer.data
@@ -336,7 +336,7 @@ class BucketViewSet(CustomGenericViewSet):
         return Response(data=ret_data, status=status.HTTP_200_OK)
 
     def list_objects_v1(self, request, *args, **kwargs):
-        return self.exception_response(request, exceptions.S3InvalidArgument(gettext("Version v1 of ListObjects is not supported now.")))
+        return handlers.ListObjectsHandler().list_objects(view=self, request=request)
 
     def list_multipart_uploads(self, request, *args, **kwargs):
         delimiter = request.query_params.get('delimiter', None)

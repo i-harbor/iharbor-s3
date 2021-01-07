@@ -85,6 +85,13 @@ class ObjectListWithOwnerSerializer(ObjectListSerializer):
         self.context['owner'] = owner
         return owner
 
+class ObjectListV2Serializer(ObjectListSerializer):
+    pass
+
+
+class ObjectListV2WithOwnerSerializer(ObjectListWithOwnerSerializer):
+    pass
+
 
 class ListMultipartUploadsSerializer(serializers.Serializer):
     """

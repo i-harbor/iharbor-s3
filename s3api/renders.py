@@ -146,3 +146,8 @@ class CommonXMLRenderer(BaseRenderer):
 
         else:
             xml.characters(force_str(data))
+
+
+class ListObjectsV1XMLRenderer(CommonXMLRenderer):
+    def __init__(self):
+        super().__init__(root_tag_name='ListBucketResult')

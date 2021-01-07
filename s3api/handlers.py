@@ -1,6 +1,7 @@
 import time
 
 from django.utils import timezone
+from django.utils.translation import gettext
 from django.conf import settings
 from rest_framework.response import Response
 
@@ -11,6 +12,8 @@ from .responses import IterResponse
 from . import exceptions
 from .harbor import HarborManager
 from . import renders
+from . import paginations
+from . import serializers
 
 
 MULTIPART_UPLOAD_MAX_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MAX_SIZE', 2 * 1024 ** 3)        # default 2GB
@@ -241,8 +244,8 @@ class MultipartUploadHandler:
             yield content.encode(encoding='utf-8')
         except Exception as e:
             upload.set_uploading()  # 发生错误，设置回正在上传
-            content = renders.CommonXMLRenderer(root_tag_name='Error',
-                                                with_xml_declaration=not yielded_doctype).render(exceptions.S3InternalError().err_data())
+            content = renders.CommonXMLRenderer(root_tag_name='Error', with_xml_declaration=not yielded_doctype
+                                                ).render(exceptions.S3InternalError().err_data())
             yield content.encode(encoding='utf-8')
 
     @staticmethod
@@ -365,3 +368,113 @@ class MultipartUploadHandler:
 
         obj_etag = f'"{obj_etag_handler.hex_md5}-{obj_parts_count}"'
         return used_upload_parts, unused_upload_parts, obj_etag
+
+
+class ListObjectsHandler:
+    def list_objects(self, request, view):
+        delimiter = request.query_params.get('delimiter', None)
+        prefix = request.query_params.get('prefix', '')
+        bucket_name = view.get_bucket_name(request)
+
+        if not delimiter:  # list所有对象和目录
+            return self.list_objects_v1_list_prefix(view=view, request=request, prefix=prefix, bucket_name=bucket_name)
+
+        if delimiter != '/':
+            return exception_response(request, exceptions.S3InvalidArgument(message=gettext('参数“delimiter”必须是“/”')))
+
+        path = prefix.strip('/')
+        if prefix and not path:  # prefix invalid, return no match data
+            return self.list_objects_v1_no_match(view=view, request=request, prefix=prefix, delimiter=delimiter,
+                                                 bucket_name=bucket_name)
+
+        hm = HarborManager()
+        try:
+            bucket, obj = hm.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=path, user=request.user)
+        except exceptions.S3Error as e:
+            return exception_response(request, e)
+
+        if obj is None:
+            return self.list_objects_v1_no_match(view=view, request=request, prefix=prefix, delimiter=delimiter,
+                                                 bucket_name=bucket_name)
+
+        paginator = paginations.ListObjectsV1CursorPagination()
+        max_keys = paginator.get_page_size(request=request)
+        ret_data = {
+            'IsTruncated': 'false',  # can not use bool
+            'Name': bucket_name,
+            'Prefix': prefix,
+            'EncodingType': 'url',
+            'MaxKeys': max_keys,
+            'Delimiter': delimiter
+        }
+
+        if prefix == '' or prefix.endswith('/'):  # list dir
+            if not obj.is_dir():
+                return self.list_objects_v1_no_match(view=view, request=request, prefix=prefix, delimiter=delimiter,
+                                                     bucket_name=bucket_name)
+
+            objs_qs = hm.list_dir_queryset(bucket=bucket, dir_obj=obj)
+            paginator.paginate_queryset(objs_qs, request=request)
+            objs, _ = paginator.get_objects_and_dirs()
+
+            serializer = serializers.ObjectListWithOwnerSerializer(objs, many=True, context={'user': request.user})
+            data = paginator.get_paginated_data(common_prefixes=True, delimiter=delimiter)
+            ret_data.update(data)
+            ret_data['Contents'] = serializer.data
+            view.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+            return Response(data=ret_data, status=200)
+
+        # list object metadata
+        if not obj.is_file():
+            return self.list_objects_v1_no_match(view=view, request=request, prefix=prefix, delimiter=delimiter,
+                                                 bucket_name=bucket_name)
+
+        serializer = serializers.ObjectListWithOwnerSerializer(obj, context={'user': request.user})
+
+        ret_data['Contents'] = [serializer.data]
+        ret_data['KeyCount'] = 1
+        view.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        return Response(data=ret_data, status=200)
+
+    @staticmethod
+    def list_objects_v1_list_prefix(view, request, prefix, bucket_name):
+        """
+        列举所有对象和目录
+        """
+        hm = HarborManager()
+        try:
+            bucket, objs_qs = hm.get_bucket_objects_dirs_queryset(bucket_name=bucket_name, user=request.user,
+                                                                  prefix=prefix)
+        except exceptions.S3Error as e:
+            return view.exception_response(request, e)
+
+        paginator = paginations.ListObjectsV1CursorPagination()
+        objs_dirs = paginator.paginate_queryset(objs_qs, request=request)
+        serializer = serializers.ObjectListWithOwnerSerializer(objs_dirs, many=True, context={'user': request.user})
+
+        data = paginator.get_paginated_data(delimiter='')
+        data['Contents'] = serializer.data
+        data['Name'] = bucket_name
+        data['Prefix'] = prefix
+        data['EncodingType'] = 'url'
+
+        view.set_renderer(request, renders.ListObjectsV1XMLRenderer())
+        return Response(data=data, status=200)
+
+    @staticmethod
+    def list_objects_v1_no_match(view, request, prefix, delimiter, bucket_name):
+        paginator = paginations.ListObjectsV1CursorPagination()
+        max_keys = paginator.get_page_size(request=request)
+        ret_data = {
+            'IsTruncated': 'false',     # can not use bool True, need use string
+            'Name': bucket_name,
+            'Prefix': prefix,
+            'EncodingType': 'url',
+            'MaxKeys': max_keys,
+            'KeyCount': 0
+        }
+        if delimiter:
+            ret_data['Delimiter'] = delimiter
+
+        view.set_renderer(request, renders.ListObjectsV1XMLRenderer())
+        return Response(data=ret_data, status=200)
