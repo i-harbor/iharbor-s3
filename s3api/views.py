@@ -1,9 +1,8 @@
 from django.utils.translation import gettext as _
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 
-from .renders import CusXMLRenderer, CommonXMLRenderer
+from .renders import CusXMLRenderer
 from .viewsets import CustomGenericViewSet
 from buckets.models import Bucket
 from .serializers import BucketListSerializer
@@ -48,4 +47,3 @@ class MainHostViewSet(CustomGenericViewSet):
             'Buckets': serializer.data,
             'Owner': {'DisplayName': user.username, 'ID': user.id}
         }, status=status.HTTP_200_OK)
-

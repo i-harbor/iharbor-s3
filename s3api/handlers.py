@@ -421,7 +421,7 @@ class ListObjectsHandler:
             data = paginator.get_paginated_data(common_prefixes=True, delimiter=delimiter)
             ret_data.update(data)
             ret_data['Contents'] = serializer.data
-            view.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+            view.set_renderer(request, renders.ListObjectsV1XMLRenderer())
             return Response(data=ret_data, status=200)
 
         # list object metadata
@@ -433,7 +433,7 @@ class ListObjectsHandler:
 
         ret_data['Contents'] = [serializer.data]
         ret_data['KeyCount'] = 1
-        view.set_renderer(request, renders.ListObjectsV2XMLRenderer())
+        view.set_renderer(request, renders.ListObjectsV1XMLRenderer())
         return Response(data=ret_data, status=200)
 
     @staticmethod

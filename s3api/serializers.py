@@ -85,6 +85,7 @@ class ObjectListWithOwnerSerializer(ObjectListSerializer):
         self.context['owner'] = owner
         return owner
 
+
 class ObjectListV2Serializer(ObjectListSerializer):
     pass
 
