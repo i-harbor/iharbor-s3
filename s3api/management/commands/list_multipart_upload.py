@@ -12,7 +12,7 @@ class MultipartUploadsSerializer(serializers.Serializer):
     obj_key = serializers.CharField()
     create_time = serializers.DateTimeField()
     expire_time = serializers.DateTimeField()
-    # status = serializers.SerializerMethodField(method_name='get_status')
+    status = serializers.SerializerMethodField(method_name='get_status')
 
     @staticmethod
     def get_status(obj):
@@ -40,6 +40,10 @@ class Command(BaseCommand):
             help='The prefix of object key',
         )
         parser.add_argument(
+            '--offset', default=0, dest='offset', type=int,
+            help='The start index of multipart upload will be list.',
+        )
+        parser.add_argument(
             '--max-num', default=100, dest='max_num', type=int,
             help='The max number of multipart upload will be list.',
         )
@@ -49,13 +53,15 @@ class Command(BaseCommand):
         max_num = options['max_num']
         prefix = options['prefix']
         show_count = options['show_count']
+        offset = options['offset']
+        limit = offset + max_num
 
         bucket = Bucket.get_bucket_by_name(bucket_name)
         if not bucket:
             raise CommandError("Bucket not found.")
 
         queryset = MultipartUploadManager().list_multipart_uploads_queryset(bucket_name=bucket_name, prefix=prefix)
-        ups = queryset[:max_num]
+        ups = queryset[offset:limit]
         serializer = MultipartUploadsSerializer(instance=ups, many=True)
         i = 0
         for up in serializer.data:
@@ -65,7 +71,8 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(self.style.WARNING(f'{up}'))
 
+        self.stdout.write(self.style.SUCCESS(f'The listed count: {i}.'))
         if show_count:
             count = queryset.count()
-            self.stdout.write(self.style.SUCCESS(f'The count of upload: {count}.'))
+            self.stdout.write(self.style.SUCCESS(f'The count of all upload: {count}.'))
 

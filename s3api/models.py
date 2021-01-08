@@ -47,9 +47,9 @@ class MultipartUpload(models.Model):
     STATUS_COMPOSING = 2
     STATUS_COMPLETED = 3
     STATUS_CHOICES = (
-        ('上传中', STATUS_UPLOADING),
-        ('组合中', STATUS_COMPOSING),
-        ('上传完成', STATUS_COMPLETED)
+        (STATUS_UPLOADING, '上传中'),
+        (STATUS_COMPOSING, '组合中'),
+        (STATUS_COMPLETED, '上传完成')
     )
 
     id = models.CharField(verbose_name='ID', primary_key=True, max_length=64, help_text='uuid1+uuid4')
