@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 from rest_framework import serializers
 
-from s3api.managers import MultipartUploadManager
+from s3api.models import MultipartUpload
 from buckets.models import Bucket
 
 
@@ -32,7 +32,7 @@ class Command(BaseCommand):
             help='Show the count of multipart upload.',
         )
         parser.add_argument(
-            '--bucket', default='', dest='bucket_name', type=str, required=True,
+            '--bucket', default='', dest='bucket_name', type=str,
             help='The multipart upload belonging to this bucket will be list.',
         )
         parser.add_argument(
@@ -56,11 +56,17 @@ class Command(BaseCommand):
         offset = options['offset']
         limit = offset + max_num
 
-        bucket = Bucket.get_bucket_by_name(bucket_name)
-        if not bucket:
-            raise CommandError("Bucket not found.")
+        lookups = {}
+        if bucket_name:
+            bucket = Bucket.get_bucket_by_name(bucket_name)
+            if not bucket:
+                raise CommandError("Bucket not found.")
 
-        queryset = MultipartUploadManager().list_multipart_uploads_queryset(bucket_name=bucket_name, prefix=prefix)
+            lookups['bucket_name'] = bucket_name
+        if prefix:
+            lookups['obj_key__startswith'] = prefix
+
+        queryset = MultipartUpload.objects.filter(**lookups).order_by('-create_time').all()
         ups = queryset[offset:limit]
         serializer = MultipartUploadsSerializer(instance=ups, many=True)
         i = 0
