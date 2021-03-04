@@ -1019,4 +1019,28 @@ class ObjectPart(HarborObject):
     def reset_part_key_and_size(self, part_key=None, part_size=None):
         super().reset_obj_id_and_size(obj_id=part_key, obj_size=part_size)
 
+    def delete_or_notfound(self):
+        """
+        删除，并返回是删除了还是本就不存在
 
+        :return:
+            True, str        # 存在，删除成功
+            False, str      # 删除失败
+            None, str        # 不存在
+        """
+        rados_key = build_part_id(self._obj_id, 0)
+        rados_api = self.get_rados_api()
+        cluster = rados_api.get_cluster()
+        try:
+            with cluster.open_ioctx(self._pool_name) as ioctx:
+                try:
+                    ok = ioctx.remove_object(rados_key)
+                    if ok is True:
+                        return True, ''
+                except rados.ObjectNotFound:
+                    return None, ''
+
+                return True, ''
+        except rados.Error as e:
+            msg = e.args[0] if e.args else f'Failed to remove rados object {rados_key}'
+            return False, msg

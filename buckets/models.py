@@ -21,6 +21,10 @@ def rand_hex_string(length=10):
 User = get_user_model()
 
 
+def build_parts_tablename(bucket_id):
+    return f'parts_{bucket_id}'
+
+
 class BucketBase(models.Model):
     """
     存储桶bucket类，bucket名称必须唯一（不包括软删除记录）
@@ -55,6 +59,9 @@ class BucketBase(models.Model):
 
     class Meta:
         abstract = True
+
+    def get_parts_table_name(self):
+        raise NotImplementedError()
 
 
 class Bucket(BucketBase):
@@ -173,7 +180,7 @@ class Bucket(BucketBase):
         """
         bucket对应的对象分段元数据数据库表名
         """
-        return f'parts_{self.id}'
+        return build_parts_tablename(self.id)
 
     def set_permission(self, public: int = 2):
         """
@@ -404,7 +411,7 @@ class Archive(BucketBase):
         """
         bucket对应的对象分段元数据数据库表名
         """
-        return f'parts_{self.original_id}'
+        return build_parts_tablename(self.original_id)
 
     def get_pool_name(self):
         return self.pool_name
