@@ -1,16 +1,16 @@
-if __name__ == "__main__":
-    import os
-    import sys
-    import django
-    # 将项目路径添加到系统搜寻路径当中，查找方式为从当前脚本开始，找到要调用的django项目的路径
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-    # 设置项目的配置文件 不做修改的话就是 settings 文件
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "s3server.settings")
-    django.setup()  # 加载项目配置
+# if __name__ == "__main__":
+#     import os
+#     import sys
+#     import django
+#     # 将项目路径添加到系统搜寻路径当中，查找方式为从当前脚本开始，找到要调用的django项目的路径
+#     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+#     # 设置项目的配置文件 不做修改的话就是 settings 文件
+#     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "s3server.settings")
+#     django.setup()  # 加载项目配置
 
 from datetime import datetime, timedelta
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from s3api.models import MultipartUpload, build_part_rados_key
 from s3api.managers import ObjectPartManager
@@ -40,6 +40,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         bucket_name = options['bucket_name']
         clear_all = options['clear_all']
+
+        if input('Are you sure to create the table?\n\n' + "Type 'yes' to continue, or 'no' to cancel: ") != 'yes':
+            raise CommandError("cancelled.")
+
         if bucket_name:
             self.handle_by_bucket_name(bucket_name, clear_all)
         else:
@@ -54,7 +58,11 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f'开始清理{length}个归档存储桶.'))
             self.clear_buckets(buckets)
 
-        uploads = self.get_multipart_queryset()
+        qs = self.get_multipart_queryset(days_ago=-1)
+        for uploads in self.chunk_queryset(qs, 1):
+            self.clear_uploads(uploads)
+
+    def clear_uploads(self, uploads):
         for upload in uploads:
             parts_tablename = build_parts_tablename(upload.bucket_id)
             self.clear_one_mulitipart(parts_tablename, upload)
@@ -108,7 +116,7 @@ class Command(BaseCommand):
         opm = ObjectPartManager(parts_table_name=part_table_name)
         try:
             parts_qs = opm.get_parts_queryset_by_upload_id(upload_id=upload.id)
-            length = len(parts_qs)
+            _ = len(parts_qs)
         except Exception as e:
             if e.args[0] == 1146:       # 数据库表不存在或已删除
                 self.stdout.write(self.style.SUCCESS(f'{str(e)}, try clear rados.'))
@@ -201,6 +209,15 @@ class Command(BaseCommand):
 
         return Archive.objects.filter(type=Archive.TYPE_S3).all()
 
+    @staticmethod
+    def chunk_queryset(qs, num_per: int = 1000):
+        while True:
+            r = qs.all()[:num_per]
+            if len(r) > 0:
+                yield r
+            else:
+                break
 
-if __name__ == "__main__":
-    Command().handle(**{'bucket_name': 'dd', 'clear_all': True})
+
+# if __name__ == "__main__":
+#     Command().handle(**{'bucket_name': '', 'clear_all': True})
