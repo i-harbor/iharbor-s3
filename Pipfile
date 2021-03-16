@@ -13,6 +13,7 @@ mysqlclient = "==1.4.4"
 uwsgi = "==2.0.18"
 djangorestframework-xml = "==2.0.0"
 django-hosts = "==4.0"
+django-cors-headers = "==3.7.0"
 
 [requires]
 python_version = "3.6"
