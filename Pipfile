@@ -8,7 +8,7 @@ verify_ssl = true
 [packages]
 django = "==2.2.14"
 concurrent-log-handler = "==0.9.16"
-djangorestframework = "==3.10.2"
+djangorestframework = "==3.11.2"
 mysqlclient = "==1.4.4"
 uwsgi = "==2.0.18"
 djangorestframework-xml = "==2.0.0"
