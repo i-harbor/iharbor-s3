@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/2.2/ref/settings/
 
 import os
 
+from corsheaders.defaults import default_headers
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -274,5 +276,43 @@ S3_MULTIPART_UPLOAD_MAX_SIZE = 2 * 1024 ** 3        # 2GB
 S3_MULTIPART_UPLOAD_MIN_SIZE = 5 * 1024 ** 2        # 5MB
 
 CORS_ALLOW_ALL_ORIGINS = True       # 允许所有请求来源跨域
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'private',
+    'range',
+    'expires',
+    'content-encoding',
+    'content-length',
+    'content-md5',
+    'date',
+    'expect',
+    'host',
+    'if-match',
+    'if-none-match',
+    'if-modified-since',
+    'if-unmodified-since',
+    'x-amz-date',
+    'x-amz-acl',
+    'x-amz-expected-bucket-owner',
+    'x-amz-content-sha256'
+]
+
+CORS_EXPOSE_HEADERS = [
+    'accept-ranges',
+    'content-length',
+    'content-type',
+    'content-disposition',
+    'content-encoding',
+    'content-range',
+    'connection',
+    'date',
+    'etag',
+    'server',
+    'x-amz-delete-marker',
+    # 'x-amz-id-2',
+    # 'x-amz-request-id',
+    # 'x-amz-version-id',
+    'x-amz-storage-class',
+    'x-amz-mp-parts-count'
+]
 
 from .security import *
