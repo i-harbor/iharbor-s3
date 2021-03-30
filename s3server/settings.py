@@ -293,7 +293,9 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-amz-date',
     'x-amz-acl',
     'x-amz-expected-bucket-owner',
-    'x-amz-content-sha256'
+    'x-amz-content-sha256',
+    'x-amz-storage-class',
+    'x-amz-user-agent'
 ]
 
 CORS_EXPOSE_HEADERS = [
@@ -308,9 +310,9 @@ CORS_EXPOSE_HEADERS = [
     'etag',
     'server',
     'x-amz-delete-marker',
-    # 'x-amz-id-2',
-    # 'x-amz-request-id',
-    # 'x-amz-version-id',
+    'x-amz-id-2',
+    'x-amz-request-id',
+    'x-amz-version-id',
     'x-amz-storage-class',
     'x-amz-mp-parts-count'
 ]
