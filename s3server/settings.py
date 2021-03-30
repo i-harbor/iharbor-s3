@@ -276,27 +276,28 @@ S3_MULTIPART_UPLOAD_MAX_SIZE = 2 * 1024 ** 3        # 2GB
 S3_MULTIPART_UPLOAD_MIN_SIZE = 5 * 1024 ** 2        # 5MB
 
 CORS_ALLOW_ALL_ORIGINS = True       # 允许所有请求来源跨域
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    'private',
-    'range',
-    'expires',
-    'content-encoding',
-    'content-length',
-    'content-md5',
-    'date',
-    'expect',
-    'host',
-    'if-match',
-    'if-none-match',
-    'if-modified-since',
-    'if-unmodified-since',
-    'x-amz-date',
-    'x-amz-acl',
-    'x-amz-expected-bucket-owner',
-    'x-amz-content-sha256',
-    'x-amz-storage-class',
-    'x-amz-user-agent'
-]
+CORS_ALLOW_HEADERS = ['*', ]
+# CORS_ALLOW_HEADERS = list(default_headers) + [
+#     'private',
+#     'range',
+#     'expires',
+#     'content-encoding',
+#     'content-length',
+#     'content-md5',
+#     'date',
+#     'expect',
+#     'host',
+#     'if-match',
+#     'if-none-match',
+#     'if-modified-since',
+#     'if-unmodified-since',
+#     'x-amz-date',
+#     'x-amz-acl',
+#     'x-amz-expected-bucket-owner',
+#     'x-amz-content-sha256',
+#     'x-amz-storage-class',
+#     'x-amz-user-agent'
+# ]
 
 CORS_EXPOSE_HEADERS = [
     'accept-ranges',
