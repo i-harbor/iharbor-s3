@@ -6,10 +6,10 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-django = "==2.2.14"
+django = "==3.2.*"
 concurrent-log-handler = "==0.9.16"
-djangorestframework = "==3.10.2"
-mysqlclient = "==1.4.4"
+djangorestframework = "==3.12.4"
+mysqlclient = "==2.0.3"
 uwsgi = "==2.0.18"
 djangorestframework-xml = "==2.0.0"
 django-hosts = "==4.0"

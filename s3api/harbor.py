@@ -1,5 +1,6 @@
 from django.utils import timezone
 from django.db.models import Case, Value, When, F
+from django.db.models import BigIntegerField
 
 from buckets.models import Bucket
 from .utils import BucketFileManagement
@@ -749,8 +750,10 @@ class HarborManager:
         new_size = max(size, old_size)  # 更新文件大小（只增不减）
         try:
             # r = model.objects.filter(id=obj.id, si=obj.si).update(si=new_size, upt=timezone.now())  # 乐观锁方式
-            r = model.objects.filter(id=obj.id).update(si=Case(When(si__lt=new_size, then=Value(new_size)),
-                                                               default=F('si')), upt=upt)
+            r = model.objects.filter(id=obj.id).update(
+                si=Case(When(si__lt=new_size, then=Value(new_size)),
+                        default=F('si'), output_field=BigIntegerField()),
+                upt=upt)
         except Exception as e:
             return False
         if r > 0:  # 更新行数

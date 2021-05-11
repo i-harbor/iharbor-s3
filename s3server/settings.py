@@ -11,11 +11,13 @@ https://docs.djangoproject.com/en/2.2/ref/settings/
 """
 
 import os
+from pathlib import Path
 
 from corsheaders.defaults import default_headers
 
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+# BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # Quick-start development settings - unsuitable for production
@@ -145,7 +147,7 @@ STATIC_URL = '/static/'
 
 # 自定义用户模型
 AUTH_USER_MODEL = 'users.UserProfile'
-
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 # 禁止未以/结尾url的请求重定向
 APPEND_SLASH = False
 
