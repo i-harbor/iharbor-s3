@@ -43,7 +43,7 @@ def get_ceph_poolname_rand():
     raise ValueError('配置文件CEPH_RADOS中POOL_NAME配置项需要是一个元组tuple')
 
 
-def create_table_for_model_class(model):
+def create_table_for_model_class(model, ):
     """
     创建Model类对应的数据库表
 
@@ -56,14 +56,15 @@ def create_table_for_model_class(model):
         using = router.db_for_write(model)
         with DatabaseSchemaEditor(connection=connections[using]) as schema_editor:
             schema_editor.create_model(model)
-            try:
-                table_name = schema_editor.quote_name(model.Meta.db_table)
-                sql = f"ALTER TABLE {table_name} CHANGE COLUMN `na` `na` LONGTEXT NOT NULL COLLATE 'utf8_bin' AFTER " \
-                      f"`id`, CHANGE COLUMN `name` `name` VARCHAR(255) NOT NULL COLLATE 'utf8_bin' AFTER `na_md5`;"
-                schema_editor.execute(sql=sql)
-            except Exception as exc:
-                if delete_table_for_model_class(model):
-                    raise exc       # model table 删除成功，抛出错误
+            if issubclass(model, BucketFileBase):
+                try:
+                    table_name = schema_editor.quote_name(model._meta.db_table)
+                    sql = f"ALTER TABLE {table_name} CHANGE COLUMN `na` `na` LONGTEXT NOT NULL COLLATE 'utf8_bin' AFTER " \
+                          f"`id`, CHANGE COLUMN `name` `name` VARCHAR(255) NOT NULL COLLATE 'utf8_bin' AFTER `na_md5`;"
+                    schema_editor.execute(sql=sql)
+                except Exception as exc:
+                    if delete_table_for_model_class(model):
+                        raise exc       # model table 删除成功，抛出错误
     except Exception as e:
         msg = traceback.format_exc()
         logger.error(msg)
