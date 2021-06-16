@@ -84,11 +84,12 @@ class CustomGenericViewSet(GenericViewSet):
             bucket name     # BucketName.SERVER_HTTP_HOST_NAME
             ''              # SERVER_HTTP_HOST_NAME or other
         """
-        main_host = getattr(settings, 'SERVER_HTTP_HOST_NAME', 's3.obs.cstcloud.cn')
+        main_hosts = getattr(settings, 'SERVER_HTTP_HOST_NAME', ['s3.obs.cstcloud.cn'])
         host = request.get_host()
-        if host.endswith('.' + main_host):
-            bucket_name, _ = host.split('.', maxsplit=1)
-            return bucket_name
+        for main_host in main_hosts:
+            if host.endswith('.' + main_host):
+                bucket_name, _ = host.split('.', maxsplit=1)
+                return bucket_name
 
         return ''
 

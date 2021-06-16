@@ -29,8 +29,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['.s3.obs.cstcloud.cn']
-SERVER_HTTP_HOST_NAME = 's3.obs.cstcloud.cn'    # 客户端请求使用的域名，需要此判断<bucket.host>
+ALLOWED_HOSTS = ['.s3.obs.cstcloud.cn', '.s3.obs.casearth.cn']
+SERVER_HTTP_HOST_NAME = ['s3.obs.cstcloud.cn', 's3.obs.casearth.cn']    # 客户端请求使用的域名，需要此判断<bucket.host>
 
 # Application definition
 
