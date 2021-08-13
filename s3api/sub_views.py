@@ -467,9 +467,13 @@ class ObjViewSet(CustomGenericViewSet):
         part_num = request.query_params.get('partNumber', None)
         upload_id = request.query_params.get('uploadId', None)
         if part_num is not None and upload_id is not None:
+            if 'x-amz-copy-source-range' in request.headers or 'x-amz-copy-source' in request.headers:
+                return self.exception_response(request, exceptions.S3MethodNotAllowed(
+                    extend_msg='UploadPartCopy unsupported'))
+
             return self.upload_part(request=request, part_num=part_num, upload_id=upload_id)
 
-        return self.put_object(request, args, kwargs)
+        return self.put_or_copy_oject(request, args, kwargs)
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -820,6 +824,13 @@ class ObjViewSet(CustomGenericViewSet):
                 raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
 
         return bucket, obj, rados, created
+
+    def put_or_copy_oject(self, request, args, kwargs):
+        if 'x-amz-copy-source' in request.headers:
+            return self.exception_response(request, exceptions.S3MethodNotAllowed(
+                extend_msg='CopyObject unsupported'))
+
+        return self.put_object(request=request, args=args, kwargs=kwargs)
 
     def put_object(self, request, args, kwargs):
         try:
