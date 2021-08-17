@@ -213,7 +213,7 @@ class S3V4Authentication(BaseAuthentication):
     def canonical_request(self, request, signed_headers: str):
         cr = [request.method.upper()]
         path = request.path
-        cr.append(quote(path))
+        cr.append(quote(path, safe='/-._~'))
         cr.append(self.canonical_query_string(request))
         cr.append(self.canonical_headers(request, signed_headers) + '\n')
         cr.append(signed_headers)
