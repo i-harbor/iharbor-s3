@@ -27,9 +27,16 @@ class S3V4Authentication(BaseAuthentication):
 
         Authorization: AWS4-HMAC-SHA256 Credential=xxx,SignedHeaders=xxx,Signature=xxx
     """
-
     keyword = AWS4_HMAC_SHA256
     model = None
+
+    def __init__(self):
+        self.s3_timestamp = None
+        self.s3_datetime = None
+        self.s3_credential = ''
+        self.s3_signed_headers = ''
+        self._region_name = ''
+        self._service_name = ''
 
     def get_model(self):
         if self.model is not None:
@@ -57,7 +64,8 @@ class S3V4Authentication(BaseAuthentication):
 
             return self.authenticate_credentials(request, credentials)
         except exceptions.S3Error as e:
-            debug_logger.debug(f'authenticate failed:{str(e)};headers={request.headers};path={request.path};query params={request.query_params}')
+            debug_logger.debug(f'authenticate failed:{str(e)};headers={request.headers};'
+                               f'path={request.path};query params={request.query_params}')
             raise e
 
     def get_credentials_from_header(self, request):
@@ -174,7 +182,8 @@ class S3V4Authentication(BaseAuthentication):
             a = a.strip(' ')
             name, val = a.split('=', maxsplit=1)
             if name not in ['Credential', 'SignedHeaders', 'Signature']:
-                raise exceptions.S3InvalidSecurity(extend_msg='key must be in ("Credential", "SignedHeaders", "Signature")')
+                raise exceptions.S3InvalidSecurity(
+                    extend_msg='key must be in ("Credential", "SignedHeaders", "Signature")')
             ret[name] = val
 
         return ret
@@ -213,7 +222,7 @@ class S3V4Authentication(BaseAuthentication):
     def canonical_request(self, request, signed_headers: str):
         cr = [request.method.upper()]
         path = request.path
-        cr.append(quote(path, safe='/-._~'))
+        cr.append(self.uri_encode(path, encode_slash=False))
         cr.append(self.canonical_query_string(request))
         cr.append(self.canonical_headers(request, signed_headers) + '\n')
         cr.append(signed_headers)
@@ -226,16 +235,17 @@ class S3V4Authentication(BaseAuthentication):
         # params attribute of the request.  The other is from the request
         # url (in which case we have to re-split the url into its components
         # and parse out the query string component).
-        l = []
+        li = []
         params = request.query_params
         names = params.keys()
         for name in sorted(names):
             value = str(params[name])
-            l.append('%s=%s' % (quote(name, safe='-_.~'), quote(value, safe='-_.~')))
-        cqs = '&'.join(l)
+            li.append('%s=%s' % (self.uri_encode(name, encode_slash=True), self.uri_encode(value, encode_slash=True)))
+        cqs = '&'.join(li)
         return cqs
 
-    def _header_value(self, value):
+    @staticmethod
+    def _header_value(value):
         # From the sigv4 docs:
         # Lowercase(HeaderName) + ':' + Trimall(HeaderValue)
         #
@@ -249,10 +259,8 @@ class S3V4Authentication(BaseAuthentication):
         containing the original version of all headers that
         were included in the StringToSign.
         """
-        sts = ['AWS4-HMAC-SHA256']
-        sts.append(self.s3_timestamp)
-        sts.append(self.credential_scope())
-        sts.append(sha256(canonical_request.encode('utf-8')).hexdigest())
+        sts = ['AWS4-HMAC-SHA256', self.s3_timestamp, self.credential_scope(),
+               sha256(canonical_request.encode('utf-8')).hexdigest()]
         return '\n'.join(sts)
 
     def scope(self):
@@ -292,11 +300,19 @@ class S3V4Authentication(BaseAuthentication):
         k_region = self._sign(k_date, self._region_name)
         k_service = self._sign(k_region, self._service_name)
         k_signing = self._sign(k_service, 'aws4_request')
-        return self._sign(k_signing, string_to_sign, hex=True)
+        return self._sign(k_signing, string_to_sign, to_hex=True)
 
-    def _sign(self, key, msg, hex=False):
-        if hex:
+    @staticmethod
+    def _sign(key, msg, to_hex=False):
+        if to_hex:
             sig = hmac.new(key, msg.encode('utf-8'), sha256).hexdigest()
         else:
             sig = hmac.new(key, msg.encode('utf-8'), sha256).digest()
         return sig
+
+    @staticmethod
+    def uri_encode(s: str, encode_slash=False):
+        if encode_slash:
+            return quote(s, safe='-._~')
+
+        return quote(s, safe='/-._~')
