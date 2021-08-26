@@ -52,8 +52,8 @@ class BucketBase(models.Model):
     size = models.BigIntegerField(verbose_name='桶大小', default=0)    # 桶内对象的总大小
     stats_time = models.DateTimeField(verbose_name='统计时间', default=timezone.now)
     ftp_enable = models.BooleanField(verbose_name='FTP可用状态', default=False)  # 桶是否开启FTP访问功能
-    ftp_password = models.CharField(verbose_name='FTP访问密码', max_length=20, blank=True)
-    ftp_ro_password = models.CharField(verbose_name='FTP只读访问密码', max_length=20, blank=True)
+    ftp_password = models.CharField(verbose_name='FTP访问密码', max_length=128, blank=True)
+    ftp_ro_password = models.CharField(verbose_name='FTP只读访问密码', max_length=128, blank=True)
     pool_name = models.CharField(verbose_name='PoolName', max_length=32, default='obs')
     type = models.SmallIntegerField(choices=TYPE_CHOICES, default=TYPE_COMMON, verbose_name='桶类型')
 
