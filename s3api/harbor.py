@@ -5,7 +5,7 @@ from django.db.models import BigIntegerField
 from buckets.models import Bucket
 from .utils import BucketFileManagement
 from utils.storagers import PathParser
-from utils.oss import HarborObject, get_size
+from utils.oss import HarborObject
 from . import exceptions
 from .managers import ObjectPartManager
 
@@ -29,7 +29,8 @@ class HarborManager:
 
         return self.get_bucket_by_name(bucket_name)
 
-    def get_bucket_by_name(self, name: str):
+    @staticmethod
+    def get_bucket_by_name(name: str):
         """
         通过桶名获取Bucket实例
         :param name: 桶名
@@ -137,7 +138,8 @@ class HarborManager:
 
         return obj
 
-    def get_metadata_obj(self, table_name: str, path: str):
+    @staticmethod
+    def get_metadata_obj(table_name: str, path: str):
         """
         直接获取目录或对象元数据对象，不检查父节点是否存在
 
@@ -158,7 +160,8 @@ class HarborManager:
 
         return None
 
-    def _get_obj_or_dir_and_bfm(self, table_name, path, name):
+    @staticmethod
+    def _get_obj_or_dir_and_bfm(table_name, path, name):
         """
         获取文件对象或目录,和BucketFileManagement对象
 
@@ -326,7 +329,8 @@ class HarborManager:
                 continue
 
             if obj.is_file():
-                raise exceptions.S3InvalidSuchKey("The path of the object's key conflicts with the existing object's key")
+                raise exceptions.S3InvalidSuchKey(
+                    message="The path of the object's key conflicts with the existing object's key")
 
             last_exist_dir = obj
             break
@@ -442,7 +446,8 @@ class HarborManager:
 
         return self._move_rename_obj(bucket=bucket, obj=obj, move_to=move_to, rename=rename)
 
-    def _move_rename_obj(self, bucket, obj, move_to, rename):
+    @staticmethod
+    def _move_rename_obj(bucket, obj, move_to, rename):
         """
         移动重命名对象
 
@@ -493,7 +498,8 @@ class HarborManager:
 
         return obj, bucket
 
-    def _validate_move_rename_params(self, move_to, rename):
+    @staticmethod
+    def _validate_move_rename_params(move_to, rename):
         """
         校验移动或重命名参数
 
@@ -643,11 +649,13 @@ class HarborManager:
         bfm = BucketFileManagement(path=path, collection_name=table_name)
         obj_model_class = bfm.get_obj_model_class()
         full_filename = bfm.build_dir_full_name(filename)
+        now_time = timezone.now()
         obj = obj_model_class(na=full_filename,  # 全路径文件名
                               name=filename,     # 文件名
                               fod=True,          # 文件
                               did=did,           # 父节点id
-                              si=0, upt=timezone.now())  # 文件大小
+                              si=0,              # 文件大小
+                              ult=now_time, upt=now_time)
         try:
             obj.save()
         except Exception as e:
@@ -655,7 +663,8 @@ class HarborManager:
 
         return obj, True
 
-    def _pre_reset_upload(self, bucket, obj, rados):
+    @staticmethod
+    def _pre_reset_upload(bucket, obj, rados):
         """
         覆盖上传前的一些操作
 
@@ -730,7 +739,8 @@ class HarborManager:
 
         return True
 
-    def _update_obj_metadata(self, obj, size, upt=None):
+    @staticmethod
+    def _update_obj_metadata(obj, size, upt=None):
         """
         更新对象元数据
         :param obj: 对象, obj实例不会被修改
@@ -760,6 +770,28 @@ class HarborManager:
             return True
 
         return False
+
+    @staticmethod
+    def update_obj_metadata_time(obj, create_time=None, modified_time=None):
+        """
+        更新对象元数据时间
+
+        :return:
+            object model instance
+        :raises: S3Error
+        """
+        if create_time is not None:
+            obj.ult = create_time
+
+        if modified_time is not None:
+            obj.upt = modified_time
+
+        try:
+            obj.save(update_fields=['ult', 'upt'])
+        except Exception as e:
+            raise exceptions.S3InternalError(f'删除对象part元数据失败, {str(e)}')
+
+        return obj
 
     def delete_object(self, bucket_name: str, obj_path: str, user=None):
         """
@@ -860,7 +892,8 @@ class HarborManager:
         generator = self._get_obj_generator(bucket=bucket, obj=obj, offset=offset, end=end, per_size=per_size)
         return generator, obj
 
-    def _get_obj_generator(self, bucket, obj, offset: int = 0, end: int = None, per_size=10 * 1024 ** 2):
+    @staticmethod
+    def _get_obj_generator(bucket, obj, offset: int = 0, end: int = None, per_size=10 * 1024 ** 2):
         """
         获取一个读取对象的生成器函数
 
@@ -916,7 +949,8 @@ class HarborManager:
         obj_key = obj.get_obj_key(bucket.id)
         pool_name = bucket.get_pool_name()
 
-        return self.__write_generator(bucket=bucket, pool_name=pool_name, obj_rados_key=obj_key, obj=obj, created=created)
+        return self.__write_generator(bucket=bucket, pool_name=pool_name, obj_rados_key=obj_key,
+                                      obj=obj, created=created)
 
     def __write_generator(self, bucket, pool_name, obj_rados_key, obj, created):
         ok = True
@@ -1009,7 +1043,8 @@ class HarborManager:
 
         :raise S3Error
         """
-        bucket, obj = self.get_bucket_and_obj_or_dir(bucket_name=bucket_name, path=obj_path, user=user, all_public=all_public)
+        bucket, obj = self.get_bucket_and_obj_or_dir(
+            bucket_name=bucket_name, path=obj_path, user=user, all_public=all_public)
         if obj and obj.is_file():
             return bucket, obj
 
@@ -1091,7 +1126,8 @@ class HarborManager:
 
         return bucket, objs
 
-    def get_objects_dirs_queryset(self, table_name: str):
+    @staticmethod
+    def get_objects_dirs_queryset(table_name: str):
         """
         获得所有文件对象和目录记录
 
@@ -1099,7 +1135,8 @@ class HarborManager:
         """
         return BucketFileManagement(collection_name=table_name).get_objects_dirs_queryset()
 
-    def get_dir_queryset(self, table_name: str, path: str):
+    @staticmethod
+    def get_dir_queryset(table_name: str, path: str):
         """
         获取路径下的所有目录记录
 

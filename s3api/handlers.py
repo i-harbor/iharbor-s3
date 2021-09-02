@@ -1,4 +1,5 @@
 import time
+from urllib import parse
 
 from django.utils import timezone
 from django.utils.translation import gettext
@@ -7,6 +8,7 @@ from rest_framework.response import Response
 
 from utils.md5 import FileMD5Handler, S3ObjectMultipartETagHandler
 from utils.oss.pyrados import HarborObject, ObjectPart
+from utils.time import datetime_from_gmt
 from .managers import ObjectPartManager
 from .responses import IterResponse
 from . import exceptions
@@ -32,6 +34,82 @@ def exception_response(request, exc):
     request.accepted_renderer = renderer
     request.accepted_media_type = renderer.media_type
     return Response(data=exc.err_data(), status=exc.status_code)
+
+
+def compare_since(t, since):
+    """
+    :param t:
+    :param since:
+    :return:
+        True    # t >= since
+        False   # t < since
+    """
+    t_ts = t.timestamp()
+    dt_ts = since.timestamp()
+    if t_ts >= dt_ts:  # 指定时间以来有改动
+        return True
+
+    return False
+
+
+def check_precondition_if_headers(headers: dict, last_modified, etag: str, key_match: str, key_none_match: str,
+                                  key_modified_since: str, key_unmodified_since: str):
+    """
+    标头if条件检查
+
+    :param headers:
+    :param last_modified: 对象最后修改时间, datetime
+    :param etag: 对象etag
+    :param key_match: header name, like 'If-Match', 'x-amz-copy-source-if-match'
+    :param key_none_match:  header name, like 'If-None-Match', 'x-amz-copy-source-if-none-match'
+    :param key_modified_since: header name, like 'If-Modified-Since', 'x-amz-copy-source-if-modified-since'
+    :param key_unmodified_since: header name, like 'If-Unmodified-Since', 'x-amz-copy-source-if-unmodified-since'
+    :return: None
+    :raises: S3Error
+    """
+    match = headers.get(key_match, None)
+    none_match = headers.get(key_none_match, None)
+    modified_since = headers.get(key_modified_since, None)
+    unmodified_since = headers.get(key_unmodified_since, None)
+
+    if modified_since:
+        modified_since = datetime_from_gmt(modified_since)
+        if modified_since is None:
+            raise exceptions.S3InvalidRequest(extend_msg=f'Invalid value of header "{key_modified_since}".')
+
+    if unmodified_since:
+        unmodified_since = datetime_from_gmt(unmodified_since)
+        if unmodified_since is None:
+            raise exceptions.S3InvalidRequest(extend_msg=f'Invalid value of header "{key_unmodified_since}".')
+
+    if (match is not None or none_match is not None) and not etag:
+        raise exceptions.S3PreconditionFailed(
+            extend_msg=f'ETag of the object is empty, Cannot support "{key_match}" and "{key_none_match}".')
+
+    if match is not None and unmodified_since is not None:
+        if match != etag:       # If-Match: False
+            raise exceptions.S3PreconditionFailed()
+        else:
+            if compare_since(t=last_modified, since=unmodified_since):  # 指定时间以来改动; If-Unmodified-Since: False
+                pass
+    elif match is not None:
+        if match != etag:       # If-Match: False
+            raise exceptions.S3PreconditionFailed()
+    elif unmodified_since is not None:
+        if compare_since(t=last_modified, since=unmodified_since):   # 指定时间以来有改动；If-Unmodified-Since: False
+            raise exceptions.S3PreconditionFailed()
+
+    if none_match is not None and modified_since is not None:
+        if none_match == etag:  # If-None-Match: False
+            raise exceptions.S3NotModified()
+        elif not compare_since(t=last_modified, since=modified_since):   # 指定时间以来无改动; If-modified-Since: False
+            raise exceptions.S3NotModified()
+    elif none_match is not None:
+        if none_match == etag:  # If-None-Match: False
+            raise exceptions.S3NotModified()
+    elif modified_since is not None:
+        if not compare_since(t=last_modified, since=modified_since):  # 指定时间以来无改动; If-modified-Since: False
+            raise exceptions.S3NotModified()
 
 
 class MultipartUploadHandler:
@@ -478,3 +556,140 @@ class ListObjectsHandler:
 
         view.set_renderer(request, renders.ListObjectsV1XMLRenderer())
         return Response(data=ret_data, status=200)
+
+
+class CopyObjectHandler:
+    def copy_object(self, request, view):
+        bucket_name = view.get_bucket_name(request)
+        obj_path_name = view.get_obj_path_name(request)
+        x_amz_copy_source = request.headers.get('x-amz-copy-source', '')
+        if x_amz_copy_source.startswith('arm:'):
+            return view.exception_response(request, exceptions.S3NotImplemented(
+                message='CopyObject unsupported access points, header "x-amz-copy-source" unsupported "ARN" format'
+            ))
+
+        try:
+            source_bucket_name, source_key, version_id = self.parse_x_amz_copy_source(x_amz_copy_source)
+        except exceptions.S3Error as exc:
+            return view.exception_response(request, exc)
+
+        if version_id:
+            return view.exception_response(request, exceptions.S3NotImplemented(
+                message='CopyObject unsupported copy the specified version of the object '
+                        'by versionId in header "x-amz-copy-source"'
+            ))
+
+        try:
+            source_bucket, source_object = self.get_source_bucket_object(
+                request=request, bucket_name=source_bucket_name, obj_key=source_key)
+        except exceptions.S3Error as exc:
+            return view.exception_response(request, exc)
+
+        try:
+            self.check_precondition(request=request, obj_upt=source_object.upt, etag=source_object.md5)
+        except exceptions.S3Error as e:
+            return view.exception_response(request, e)
+
+        if source_bucket_name == bucket_name and source_key == obj_path_name:
+            if not source_bucket.check_user_own_bucket(request.user):
+                return view.exception_response(request, exceptions.S3AccessDenied(
+                    message=f'no permission to access bucket "{bucket_name}"'))
+
+            return self.handle_updete_metadata(view=view, request=request, obj=source_object)
+
+        return view.exception_response(request, exceptions.S3NotImplemented(
+            extend_msg='CopyObject not implemented'))
+
+    @staticmethod
+    def get_source_bucket_object(request, bucket_name: str, obj_key: str):
+        """
+        源对象包括公开权限的对象
+        :return:
+            bucket, object
+
+        :raises: S3Error
+        """
+        hm = HarborManager()
+        try:
+            bucket, obj = hm.get_bucket_and_obj_or_dir(
+                bucket_name=bucket_name, path=obj_key, user=request.user, all_public=True)
+        except exceptions.S3Error as e:
+            raise e
+
+        if obj is None:
+            raise exceptions.S3NoSuchKey()
+
+        if not obj.is_file():
+            raise exceptions.S3NoSuchKey()
+
+        return bucket, obj
+
+    @staticmethod
+    def handle_updete_metadata(view, request, obj):
+        now_time = timezone.now()
+        try:
+            obj = HarborManager().update_obj_metadata_time(obj=obj, create_time=now_time, modified_time=now_time)
+        except exceptions.S3Error as e:
+            return view.exception_response(request, e)
+
+        data = {
+            'ETag': obj.md5,
+            'LastModified': obj.upt
+        }
+        view.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CopyObjectResult'))
+        return Response(data=data, status=200)
+
+    @staticmethod
+    def parse_x_amz_copy_source(x_amz_copy_source: str):
+        """
+        :retrun: tuple
+            (
+                bucket: str,
+                key: str,
+                versionId: str      # str or None
+            )
+        """
+        (scheme, netloc, path, query, fragment) = parse.urlsplit(x_amz_copy_source)
+        copy_source_path = parse.unquote(path)
+        copy_source_path = copy_source_path.lstrip('/')
+        source_bucket_key = copy_source_path.split('/', maxsplit=1)
+        if len(source_bucket_key) != 2:
+            raise exceptions.S3InvalidRequest(
+                extend_msg='invalid value of header "x-amz-copy-source"')
+
+        source_bucket, source_key = source_bucket_key
+        try:
+            query_dict = parse.parse_qs(query, keep_blank_values=True)
+        except Exception as e:
+            raise exceptions.S3InvalidRequest(
+                extend_msg='invalid value of header "x-amz-copy-source"')
+
+        version_id = query_dict.get('versionId')
+        if version_id and isinstance(version_id, list):
+            version_id = version_id[0]
+
+        return source_bucket, source_key, version_id
+
+    @staticmethod
+    def check_precondition(request, obj_upt, etag):
+        """
+         标头if条件检查
+
+        :param request:
+        :param obj_upt: 对象最后修改时间
+        :param etag: 对象etag
+        :return: None
+        :raises: S3Error
+        """
+        try:
+            check_precondition_if_headers(
+                headers=request.headers, last_modified=obj_upt, etag=etag,
+                key_match='x-amz-copy-source-if-match',
+                key_none_match='x-amz-copy-source-if-none-match',
+                key_modified_since='x-amz-copy-source-if-modified-since',
+                key_unmodified_since='x-amz-copy-source-if-unmodified-since'
+            )
+        except exceptions.S3NotModified as e:
+            raise exceptions.S3PreconditionFailed(extend_msg=str(e))
+
+

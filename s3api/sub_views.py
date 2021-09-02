@@ -54,6 +54,11 @@ class BucketViewSet(CustomGenericViewSet):
         if list_type == '2':
             return self.list_objects_v2(request=request, args=args, kwargs=kwargs)
 
+        # ListObjectVersions
+        if 'versions' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='ListObjectVersions not implemented'))
+
         return self.list_objects_v1(request=request, args=args, kwargs=kwargs)
 
     def create(self, request, *args, **kwargs):
@@ -433,6 +438,41 @@ class ObjViewSet(CustomGenericViewSet):
         """
         get object
         """
+        # GetObjectAcl
+        if 'acl' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectAcl not implemented'))
+
+        # GetObjectLegalHold
+        if 'legal-hold' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectLegalHold not implemented'))
+
+        # GetObjectLockConfiguration
+        if 'object-lock' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectLockConfiguration not implemented'))
+
+        # GetObjectRetention
+        if 'retention' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectRetention not implemented'))
+
+        # GetObjectTagging
+        if 'tagging' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectTagging not implemented'))
+
+        # GetObjectTorrent
+        if 'torrent' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='GetObjectTorrent not implemented'))
+
+        # ListParts
+        if 'uploadId' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='ListParts not implemented'))
+
         return self.s3_get_object(request=request, args=args, kwargs=kwargs)
 
     def create(self, request, *args, **kwargs):
@@ -464,14 +504,40 @@ class ObjViewSet(CustomGenericViewSet):
         if key.endswith('/') and content_length == '0':
             return self.create_dir(request=request, args=args, kwargs=kwargs)
 
+        # UploadPart check
         part_num = request.query_params.get('partNumber', None)
         upload_id = request.query_params.get('uploadId', None)
         if part_num is not None and upload_id is not None:
             if 'x-amz-copy-source-range' in request.headers or 'x-amz-copy-source' in request.headers:
-                return self.exception_response(request, exceptions.S3MethodNotAllowed(
-                    extend_msg='UploadPartCopy unsupported'))
+                return self.exception_response(request, exceptions.S3NotImplemented(
+                    message='UploadPartCopy not implemented'))
 
             return self.upload_part(request=request, part_num=part_num, upload_id=upload_id)
+
+        # PutObjectAcl
+        if 'acl' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='PutObjectAcl not implemented'))
+
+        # PutObjectLegalHold
+        if 'legal-hold' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='PutObjectLegalHold not implemented'))
+
+        # PutObjectLockConfiguration
+        if 'object-lock' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='PutObjectLockConfiguration not implemented'))
+
+        # PutObjectRetention
+        if 'retention' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='PutObjectRetention not implemented'))
+
+        # PutObjectTagging
+        if 'tagging' in request.query_params:
+            return self.exception_response(request, exceptions.S3NotImplemented(
+                message='PutObjectTagging not implemented'))
 
         return self.put_or_copy_oject(request, args, kwargs)
 
@@ -580,7 +646,8 @@ class ObjViewSet(CustomGenericViewSet):
 
         return response
 
-    def get_object_part(self, bucket, obj_id: int, part_number: int):
+    @staticmethod
+    def get_object_part(bucket, obj_id: int, part_number: int):
         """
         获取对象一个part元数据
 
@@ -827,8 +894,7 @@ class ObjViewSet(CustomGenericViewSet):
 
     def put_or_copy_oject(self, request, args, kwargs):
         if 'x-amz-copy-source' in request.headers:
-            return self.exception_response(request, exceptions.S3MethodNotAllowed(
-                extend_msg='CopyObject unsupported'))
+            return handlers.CopyObjectHandler().copy_object(request=request, view=self)
 
         return self.put_object(request=request, args=args, kwargs=kwargs)
 
@@ -846,16 +912,16 @@ class ObjViewSet(CustomGenericViewSet):
         uploader = FileUploadToCephHandler(request, pool_name=pool_name, obj_key=obj_key)
         request.upload_handlers = [uploader]
 
-        def clean_put(uploader, obj, created):
+        def clean_put(_uploader, _obj, _created):
             # 删除数据和元数据
-            f = getattr(uploader, 'file', None)
+            f = getattr(_uploader, 'file', None)
             s = f.size if f else 0
             try:
                 rados.delete(obj_size=s)
             except Exception:
                 pass
-            if created:
-                obj.do_delete()
+            if _created:
+                _obj.do_delete()
 
         try:
             self.kwargs['filename'] = 'filename'
@@ -1087,9 +1153,9 @@ class ObjViewSet(CustomGenericViewSet):
         uploader = PartUploadToCephHandler(request, part_key=part_key)
         request.upload_handlers = [uploader]
 
-        def clean_put(uploader):
+        def clean_put(_uploader):
             # 删除数据
-            f = getattr(uploader, 'file', None)
+            f = getattr(_uploader, 'file', None)
             if f is not None:
                 try:
                     f.delete()
@@ -1406,26 +1472,7 @@ class ObjViewSet(CustomGenericViewSet):
         return response
 
     @staticmethod
-    def compare_since(t, since: str):
-        """
-        :param t:
-        :param since:
-        :return:
-            True    # t >= since
-            False   # t < since
-        """
-        dt = datetime_from_gmt(since)
-        if not dt:
-            raise exceptions.S3InvalidRequest(extend_msg='Invalid value of header If-Modified-Since.')
-
-        t_ts = t.timestamp()
-        dt_ts = dt.timestamp()
-        if t_ts >= dt_ts:     # 指定时间以来有改动
-            return True
-
-        return False
-
-    def head_object_precondition_if_headers(self, request, obj_upt, etag: str):
+    def head_object_precondition_if_headers(request, obj_upt, etag: str):
         """
         标头if条件检查
 
@@ -1435,35 +1482,10 @@ class ObjViewSet(CustomGenericViewSet):
         :return: None
         :raises: S3Error
         """
-        match = request.headers.get('If-Match', None)
-        none_match = request.headers.get('If-None-Match', None)
-        modified_since = request.headers.get('If-Modified-Since', None)
-        unmodified_since = request.headers.get('If-Unmodified-Since', None)
-
-        if (match is not None or none_match is not None) and not etag:
-            raise exceptions.S3PreconditionFailed(extend_msg='ETag of the object is empty, Cannot support "If-Match" and "If-None-Match".')
-
-        if match is not None and unmodified_since is not None:
-            if match != etag:       # If-Match: False
-                raise exceptions.S3PreconditionFailed()
-            else:
-                if self.compare_since(t=obj_upt, since=unmodified_since):  # 指定时间以来改动; If-Unmodified-Since: False
-                    pass
-        elif match is not None:
-            if match != etag:       # If-Match: False
-                raise exceptions.S3PreconditionFailed()
-        elif unmodified_since is not None:
-            if self.compare_since(t=obj_upt, since=unmodified_since):   # 指定时间以来有改动；If-Unmodified-Since: False
-                raise exceptions.S3PreconditionFailed()
-
-        if none_match is not None and modified_since is not None:
-            if none_match == etag:  # If-None-Match: False
-                raise exceptions.S3NotModified()
-            elif not self.compare_since(t=obj_upt, since=modified_since):   # 指定时间以来无改动; If-modified-Since: False
-                raise exceptions.S3NotModified()
-        elif none_match is not None:
-            if none_match == etag:  # If-None-Match: False
-                raise exceptions.S3NotModified()
-        elif modified_since is not None:
-            if not self.compare_since(t=obj_upt, since=modified_since):  # 指定时间以来无改动; If-modified-Since: False
-                raise exceptions.S3NotModified()
+        handlers.check_precondition_if_headers(
+            headers=request.headers, last_modified=obj_upt, etag=etag,
+            key_match='If-Match',
+            key_none_match='If-None-Match',
+            key_modified_since='If-Modified-Since',
+            key_unmodified_since='If-Unmodified-Since'
+        )

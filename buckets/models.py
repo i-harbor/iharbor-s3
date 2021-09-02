@@ -230,10 +230,10 @@ class Bucket(BucketBase):
         :param save: 是否更新到数据库
         :return: True(success); False(failure)
         """
-        self.obj_count += 1
+        self.objs_count += 1
         if save:
             try:
-                self.save()
+                self.save(update_fields=['objs_count'])
             except:
                 return False
 
@@ -246,10 +246,10 @@ class Bucket(BucketBase):
         :param save: 是否更新到数据库
         :return: True(success); False(failure)
         """
-        self.obj_count = max(self.obj_count - 1, 0)
+        self.objs_count = max(self.objs_count - 1, 0)
         if not save:
             try:
-                self.save()
+                self.save(update_fields=['objs_count'])
             except:
                 return False
 
