@@ -16,6 +16,7 @@ def uuid1_time_hex_string(t):
     f = t.timestamp()
     h = uuid.uuid1().hex
     s = f'{f:.6f}'
+    s += '0' * (len(s) % 4)
     bs = base64.b64encode(s.encode(encoding='utf-8')).decode('ascii')
     return f'{h}_{bs}'
 

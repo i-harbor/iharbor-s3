@@ -25,6 +25,7 @@ class Command(BaseCommand):
     """
 
     help = """** manage.py clear_multipart_upload -h **"""
+    days_ago = 30
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -36,8 +37,21 @@ class Command(BaseCommand):
             '--bucket', default='', dest='bucket_name', type=str,
             help='The multipart upload belonging to this bucket will be clear.',
         )
+        parser.add_argument(
+            '--days-ago', default='30', dest='days-ago', type=int,
+            help='Clear objects and directories that have been deleted more than days ago.',
+        )
 
     def handle(self, *args, **options):
+        days_ago = options.get('days-ago', 30)
+        try:
+            days_ago = int(days_ago)
+            if days_ago < 0:
+                days_ago = 0
+        except Exception as e:
+            raise CommandError(f"Clearing buckets cancelled. invalid value of '--days-ago', {str(e)}")
+
+        self.days_ago = days_ago
         bucket_name = options['bucket_name']
         clear_all = options['clear_all']
 
@@ -58,7 +72,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f'开始清理{length}个归档存储桶.'))
             self.clear_buckets(buckets)
 
-        qs = self.get_multipart_queryset(days_ago=-1)
+        qs = self.get_multipart_queryset(days_ago=self.days_ago)
         for uploads in self.chunk_queryset(qs, 1):
             self.clear_uploads(uploads)
 
@@ -88,7 +102,7 @@ class Command(BaseCommand):
     def clear_buckets(self, buckets):
         for b in buckets:
             part_table_name = b.get_parts_table_name()
-            qs = self.get_multipart_queryset(b)
+            qs = self.get_multipart_queryset(bucket=b, days_ago=self.days_ago)
             for upload in qs:
                 self.clear_one_mulitipart(part_table_name=part_table_name, upload=upload)
 
