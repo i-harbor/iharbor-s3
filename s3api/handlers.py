@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from utils.md5 import FileMD5Handler, S3ObjectMultipartETagHandler
 from utils.oss.pyrados import HarborObject, ObjectPart
 from utils.time import datetime_from_gmt
+from buckets.models import BucketFileBase
 from .managers import ObjectPartManager
 from .responses import IterResponse
 from . import exceptions
@@ -597,8 +598,12 @@ class CopyObjectHandler:
 
             return self.handle_updete_metadata(view=view, request=request, obj=source_object)
 
-        return view.exception_response(request, exceptions.S3NotImplemented(
-            extend_msg='CopyObject not implemented'))
+        if source_object.obj_size > MULTIPART_UPLOAD_MAX_SIZE:
+            return view.exception_response(request, exceptions.S3NotImplemented(
+                message=f'The size of source object is too large'))
+
+        return self.handle_copy_object(view=view, request=request, bucket_name=bucket_name, obj_key=obj_path_name,
+                                       source_bucket=source_bucket, source_object=source_object)
 
     @staticmethod
     def get_source_bucket_object(request, bucket_name: str, obj_key: str):
@@ -626,6 +631,9 @@ class CopyObjectHandler:
 
     @staticmethod
     def handle_updete_metadata(view, request, obj):
+        """
+        :return: response
+        """
         now_time = timezone.now()
         try:
             obj = HarborManager().update_obj_metadata_time(obj=obj, create_time=now_time, modified_time=now_time)
@@ -692,4 +700,120 @@ class CopyObjectHandler:
         except exceptions.S3NotModified as e:
             raise exceptions.S3PreconditionFailed(extend_msg=str(e))
 
+    def handle_copy_object(self, view, request, bucket_name: str, obj_key: str, source_bucket, source_object):
+        """
+        :return: response
+        """
+        if bucket_name == source_bucket.name:
+            bucket, obj, obj_rados, created = self.create_object_metadata(
+                request=request, bucket_or_name=source_bucket, obj_key=obj_key)
+        else:
+            bucket, obj, obj_rados, created = self.create_object_metadata(
+                request=request, bucket_or_name=bucket_name, obj_key=obj_key)
 
+        source_rados = self.build_object_rados(bucket=source_bucket, obj=source_object)
+        try:
+            write_size, md5 = self.copy_object_rados(obj_rados=obj_rados, source_rados=source_rados)
+            if write_size != source_object.obj_size:
+                raise exceptions.S3InternalError(message='raods data copy is interrupted or incomplete')
+        except exceptions.S3Error as e:
+            obj.do_delete()
+            obj_rados.delete()
+            return view.exception_response(request=request, exc=exceptions.S3InternalError(
+                message=f"copy object rados failed, {str(e)}"))
+
+        # update metadata
+        obj.md5 = md5
+        obj.si = write_size
+        obj.upt = timezone.now()
+        obj.stl = False  # 没有共享时间限制
+        try:
+            obj.save(update_fields=['si', 'md5', 'upt', 'stl'])
+        except Exception as e:
+            obj.do_delete()
+            obj_rados.delete()
+            return view.exception_response(request=request, exc=exceptions.S3InternalError(
+                message=f"copy object rados failed, {str(e)}"))
+
+        data = {
+            'ETag': obj.md5,
+            'LastModified': obj.upt
+        }
+        view.set_renderer(request, renders.CusXMLRenderer(root_tag_name='CopyObjectResult'))
+        return Response(data=data, status=200)
+
+    @staticmethod
+    def copy_object_rados(obj_rados, source_rados):
+        """
+        :return: (
+            len: int         # length of copy bytes
+            md5: str         # md5 of copy bytes
+        )
+        :raises: S3Error
+        """
+        md5_handler = FileMD5Handler()
+        offset = 0
+        source_generator = source_rados.read_obj_generator()
+        for data in source_generator:
+            if not data:
+                break
+
+            ok, msg = obj_rados.write(offset=offset, data_block=data)
+            if not ok:
+                ok, msg = obj_rados.write(offset=offset, data_block=data)
+
+            if not ok:
+                raise exceptions.S3InternalError(extend_msg=msg)
+
+            md5_handler.update(offset=offset, data=data)
+            offset = offset + len(data)
+
+        return offset, md5_handler.hex_md5
+
+    def create_object_metadata(self, request, bucket_or_name, obj_key: str):
+        """
+        :param request:
+        :param bucket_or_name: bucket name or bucket instance
+        :param obj_key: object key
+        :return: (
+            bucket,         # bucket instance
+            obj,            # object instance
+            rados,          # ceph rados of object
+            created         # True: new created; False: not new
+        )
+        :raises: S3Error
+        """
+        h_manager = HarborManager()
+        if isinstance(bucket_or_name, str):
+            bucket, obj, created = h_manager.create_empty_obj(
+                bucket_name=bucket_or_name, obj_path=obj_key, user=request.user)
+        else:
+            bucket = bucket_or_name
+            collection_name = bucket.get_bucket_table_name()
+            obj, created = h_manager.get_or_create_obj(collection_name, obj_key)
+
+        # 访问权限
+        acl_choices = {'private': BucketFileBase.SHARE_ACCESS_NO, 'public-read': BucketFileBase.SHARE_ACCESS_READONLY,
+                       'public-read-write': BucketFileBase.SHARE_ACCESS_READWRITE}
+        x_amz_acl = request.headers.get('X-Amz-Acl', 'private').lower()
+        if x_amz_acl not in acl_choices:
+            raise exceptions.S3InvalidRequest(f'The value {x_amz_acl} of header "x-amz-acl" is not supported.')
+
+        if x_amz_acl != 'private':
+            share_code = acl_choices[x_amz_acl]
+            obj.set_shared(share=share_code)
+
+        rados = self.build_object_rados(bucket=bucket, obj=obj)
+        if created is False:  # 对象已存在，不是新建的
+            try:
+                h_manager._pre_reset_upload(bucket=bucket, obj=obj, rados=rados)  # 重置对象大小
+            except Exception as exc:
+                raise exceptions.S3InvalidRequest(f'reset object error, {str(exc)}')
+
+        return bucket, obj, rados, created
+
+    @staticmethod
+    def build_object_rados(bucket, obj):
+        pool_name = bucket.get_pool_name()
+        obj_key = obj.get_obj_key(bucket.id)
+        return HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
