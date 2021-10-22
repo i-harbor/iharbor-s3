@@ -4,8 +4,9 @@ from django.core.files.uploadedfile import UploadedFile
 from django.core.exceptions import RequestDataTooBig
 from django.utils.translation import gettext
 
-from utils.oss.pyrados import HarborObject, FileWrapper, RadosError, ObjectPart
+from utils.oss.pyrados import FileWrapper, RadosError
 from utils.md5 import FileMD5Handler, Sha256Handler
+from s3api.utils import build_harbor_object, build_harbor_object_part
 
 
 class ParseDecodeBase64Error(Exception):
@@ -122,8 +123,9 @@ class FileUploadToCephHandler(FileUploadHandler):
     chunk_size = 5 * 2 ** 20    # 5MB
     max_size_upload_limit = None
 
-    def __init__(self, request=None, pool_name='', obj_key=''):
+    def __init__(self, request, using: str, pool_name='', obj_key=''):
         super().__init__(request=request)
+        self.using = using
         self.pool_name = pool_name
         self.obj_key = obj_key
         self.file = None
@@ -152,7 +154,8 @@ class FileUploadToCephHandler(FileUploadHandler):
         Create the file object to append to as data is coming in.
         """
         super().new_file(*args, **kwargs)
-        self.file = FileWrapper(HarborObject(pool_name=self.pool_name, obj_id=self.obj_key))
+        ho = build_harbor_object(using=self.using, pool_name=self.pool_name, obj_id=self.obj_key)
+        self.file = FileWrapper(ho)
         self.file_md5_handler = FileMD5Handler()
 
     def receive_data_chunk(self, raw_data, start):
@@ -193,9 +196,9 @@ class PartUploadToCephHandler(FileUploadToCephHandler):
     chunk_size = 5 * 2 ** 20    # 5MB
     max_size_upload_limit = 2 * 1024 ** 3       # 2GB
 
-    def __init__(self, request=None, pool_name='', part_key=''):
+    def __init__(self, request, using: str, pool_name='', part_key=''):
         self.part_key = part_key
-        super().__init__(request=request, pool_name=pool_name, obj_key=part_key)
+        super().__init__(request=request, using=using, pool_name=pool_name, obj_key=part_key)
         amz_content_sha256 = self.request.headers.get('X-Amz-Content-SHA256', None)
         if amz_content_sha256 and amz_content_sha256 != 'UNSIGNED-PAYLOAD':
             self.file_sha256_handler = Sha256Handler()
@@ -207,7 +210,8 @@ class PartUploadToCephHandler(FileUploadToCephHandler):
         Create the file object to append to as data is coming in.
         """
         super().new_file(*args, **kwargs)
-        self.file = FileWrapper(ObjectPart(pool_name=self.pool_name, part_key=self.part_key))
+        ho = build_harbor_object_part(using=self.using, pool_name=self.pool_name, part_key=self.part_key)
+        self.file = FileWrapper(ho)
         self.file_md5_handler = FileMD5Handler()
 
     def receive_data_chunk(self, raw_data, start):

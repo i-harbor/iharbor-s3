@@ -1,5 +1,3 @@
-from .settings import CEPH_RADOS
-
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'xxx'
 
@@ -42,7 +40,26 @@ DATABASES = {
 }
 
 # Ceph rados settings
-CEPH_RADOS['POOL_NAME'] = ('obs_test',)
+CEPH_RADOS = {
+    'default': {
+        'CLUSTER_NAME': 'ceph',
+        'USER_NAME': 'client.admin',
+        'CONF_FILE_PATH': '/etc/ceph/ceph.conf',
+        'KEYRING_FILE_PATH': '/etc/ceph/ceph.client.admin.keyring',
+        'POOL_NAME': ('xxx',),
+        'MULTIPART_POOL_NAME': 'xxx',
+        'DISABLE_CHOICE': False,                # True: 创建bucket时不选择；
+    },
+    # 'ceph2': {
+    #     'CLUSTER_NAME': 'ceph',
+    #     'USER_NAME': 'client.obs',
+    #     'CONF_FILE_PATH': '/etc/ceph/ceph2.conf',
+    #     'KEYRING_FILE_PATH': '/etc/ceph/ceph2.client.obs.keyring',
+    #     'POOL_NAME': ('obs-test',),
+    #     'MULTIPART_POOL_NAME': 'obs-test',
+    #     'DISABLE_CHOICE': True,               # True: 创建bucket时不选择；
+    # }
+}
 
 
 # 允许所有主机执行跨站点请求

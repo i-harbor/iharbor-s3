@@ -230,15 +230,6 @@ LOGGING = {
     },
 }
 
-# Ceph rados settings
-CEPH_RADOS = {
-    'CLUSTER_NAME': 'ceph',
-    'USER_NAME': 'client.obs',
-    'CONF_FILE_PATH': '/etc/ceph/ceph.conf',
-    'KEYRING_FILE_PATH': '/etc/ceph/ceph.client.obs.keyring',
-    'POOL_NAME': ('xxx',),
-    'MULTIPART_POOL_NAME': 'obs_test',
-}
 
 DATABASE_ROUTERS = [
     's3server.db_routers.MetadataRouter',

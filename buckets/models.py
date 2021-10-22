@@ -9,7 +9,6 @@ from django.utils.translation import gettext_lazy, gettext as _
 from django.contrib.auth import get_user_model
 from django.db.models import F
 
-from utils.storagers import PathParser
 from utils.md5 import EMPTY_HEX_MD5, get_str_hexMD5
 
 
@@ -56,6 +55,7 @@ class BucketBase(models.Model):
     ftp_ro_password = models.CharField(verbose_name='FTP只读访问密码', max_length=128, blank=True)
     pool_name = models.CharField(verbose_name='PoolName', max_length=32, default='obs')
     type = models.SmallIntegerField(choices=TYPE_CHOICES, default=TYPE_COMMON, verbose_name='桶类型')
+    ceph_using = models.CharField(verbose_name=_('CEPH集群配置别名'), max_length=16, default='default')
 
     class Meta:
         abstract = True
@@ -146,6 +146,7 @@ class Bucket(BucketBase):
             a.ftp_ro_password = self.ftp_ro_password
             a.pool_name = self.pool_name
             a.type = self.type
+            a.ceph_using = self.ceph_using
             a.save()
         except Exception as e:
             return False
@@ -505,6 +506,8 @@ class BucketFileBase(models.Model):
     sds = models.BooleanField(default=False, choices=SOFT_DELETE_STATUS_CHOICES) # soft delete status,软删除,True->删除状态
     md5 = models.CharField(default='', max_length=32, verbose_name='md5')  # 该文件的md5码，32位十六进制字符串
     share = models.SmallIntegerField(verbose_name='分享访问权限', choices=SHARE_ACCESS_CHOICES, default=SHARE_ACCESS_NO)
+    async1 = models.DateTimeField(blank=True, null=True, default=None, verbose_name='第1备份点备份时间')
+    async2 = models.DateTimeField(blank=True, null=True, default=None, verbose_name='第2备份点备份时间')
 
     class Meta:
         abstract = True
@@ -769,6 +772,41 @@ class BucketFileBase(models.Model):
 
     def get_parent_path(self):
         """获取父路经字符串"""
+        from utils.storagers import PathParser
         path, _ = PathParser(filepath=self.na).get_path_and_filename()
         return path
 
+
+class BackupBucket(models.Model):
+    class Status(models.TextChoices):
+        START = 'start', gettext_lazy('开启同步')
+        STOP = 'stop', gettext_lazy('暂停同步')
+        DELETED = 'deleted', gettext_lazy('删除')
+
+    id = models.BigAutoField(auto_created=True, primary_key=True, verbose_name='ID')
+    bucket = models.ForeignKey(to=Bucket, on_delete=models.CASCADE, related_name='backup_buckets',
+                               verbose_name='存储桶')
+    endpoint_url = models.URLField(max_length=255, verbose_name='备份点服务地址', help_text='http(s)://exemple.com')
+    bucket_token = models.CharField(max_length=32, verbose_name='备份点bucket读写token')
+    bucket_name = models.CharField(max_length=63, verbose_name='备份点bucket名称')
+    created_time = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    modified_time = models.DateTimeField(auto_now=True, verbose_name='修改时间')
+    remarks = models.CharField(verbose_name='备注', max_length=255, blank=True, default='')
+    status = models.CharField(max_length=16, verbose_name='状态', choices=Status.choices, default=Status.STOP)
+    backup_num = models.SmallIntegerField(verbose_name='备份点编号', choices=((1, '1'), (2, '2')), default=1)
+
+    class Meta:
+        ordering = ['-id']
+        verbose_name = '存储桶备份点'
+        verbose_name_plural = verbose_name
+        constraints = [
+            models.UniqueConstraint(
+                fields=['bucket', 'backup_num'], name='unique_bucket_backup_num'
+            )
+        ]
+
+    def __str__(self):
+        return f'<{self.bucket.name}> => [{self.endpoint_url}]<{self.bucket_name}>'
+
+    def is_start_async(self):
+        return self.status == self.Status.START

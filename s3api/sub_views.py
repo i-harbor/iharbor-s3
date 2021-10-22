@@ -14,14 +14,14 @@ from rest_framework.parsers import FileUploadParser
 from buckets.models import Bucket
 from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
 from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
-from utils.oss.pyrados import HarborObject, RadosError
+from utils.oss.pyrados import RadosError
 from utils.time import datetime_from_gmt
 from buckets.models import BucketFileBase
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
 from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_for_model_class,
-                    delete_table_for_model_class)
+                    delete_table_for_model_class, build_harbor_object, get_ceph_alias_rand)
 from . import exceptions
 from .harbor import HarborManager
 from . import serializers
@@ -193,8 +193,15 @@ class BucketViewSet(CustomGenericViewSet):
 
         user = request.user
         perms = acl_choices[acl]
-        pool_name = get_ceph_poolname_rand()
-        bucket = Bucket(pool_name=pool_name, user=user, name=bucket_name, access_permission=perms, type=Bucket.TYPE_S3)
+        try:
+            ceph_using = get_ceph_alias_rand()
+            pool_name = get_ceph_poolname_rand(using=ceph_using)
+        except Exception as e:
+            return self.exception_response(
+                request, exceptions.S3InternalError(message=gettext('创建存储桶失败，选择ceph集群和pool时错误,') + str(e)))
+
+        bucket = Bucket(ceph_using=ceph_using, pool_name=pool_name, user=user, name=bucket_name,
+                        access_permission=perms, type=Bucket.TYPE_S3)
         try:
             bucket.save()
         except Exception as e:
@@ -883,7 +890,7 @@ class ObjViewSet(CustomGenericViewSet):
         pool_name = bucket.get_pool_name()
         obj_key = obj.get_obj_key(bucket.id)
 
-        rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        rados = build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         if created is False:  # 对象已存在，不是新建的
             try:
                 h_manager._pre_reset_upload(bucket=bucket, obj=obj, rados=rados)  # 重置对象大小
@@ -909,7 +916,8 @@ class ObjViewSet(CustomGenericViewSet):
     def put_object_handle(self, request, bucket, obj, rados, created):
         pool_name = bucket.get_pool_name()
         obj_key = obj.get_obj_key(bucket.id)
-        uploader = FileUploadToCephHandler(request, pool_name=pool_name, obj_key=obj_key)
+        uploader = FileUploadToCephHandler(using=bucket.ceph_using, request=request,
+                                           pool_name=pool_name, obj_key=obj_key)
         request.upload_handlers = [uploader]
 
         def clean_put(_uploader, _obj, _created):
@@ -1150,7 +1158,7 @@ class ObjViewSet(CustomGenericViewSet):
         :raises: S3Error,  Exception
         """
         part_key = build_part_rados_key(upload_id=upload.id, part_num=part_number)
-        uploader = PartUploadToCephHandler(request, part_key=part_key)
+        uploader = PartUploadToCephHandler(request, using=bucket.ceph_using, part_key=part_key)
         request.upload_handlers = [uploader]
 
         def clean_put(_uploader):

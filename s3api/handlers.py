@@ -7,7 +7,6 @@ from django.conf import settings
 from rest_framework.response import Response
 
 from utils.md5 import FileMD5Handler, S3ObjectMultipartETagHandler
-from utils.oss.pyrados import HarborObject, ObjectPart
 from utils.time import datetime_from_gmt
 from buckets.models import BucketFileBase
 from .managers import ObjectPartManager
@@ -17,6 +16,7 @@ from .harbor import HarborManager
 from . import renders
 from . import paginations
 from . import serializers
+from .utils import build_harbor_object, build_harbor_object_part
 
 
 MULTIPART_UPLOAD_MAX_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MAX_SIZE', 2 * 1024 ** 3)        # default 2GB
@@ -133,7 +133,8 @@ class MultipartUploadHandler:
         opm = ObjectPartManager(bucket=bucket)
         upload_parts_qs = opm.get_parts_queryset_by_upload_id_obj_id(upload_id=upload.id, obj_id=0)
         upload_parts = list(upload_parts_qs)
-        for failed_parts in self.clear_parts_cache_iter(parts=upload_parts, is_rm_metadata=True):
+        for failed_parts in self.clear_parts_cache_iter(using=bucket.ceph_using, parts=upload_parts,
+                                                        is_rm_metadata=True):
             if failed_parts is None:
                 continue
             elif failed_parts:
@@ -143,7 +144,8 @@ class MultipartUploadHandler:
                     return exception_response(request, exceptions.S3InternalError())
 
                 # 小部分删除失败，重试清除删除失败的part
-                for failed_parts_2 in self.clear_parts_cache_iter(parts=failed_parts, is_rm_metadata=True):
+                for failed_parts_2 in self.clear_parts_cache_iter(using=bucket.ceph_using, parts=failed_parts,
+                                                                  is_rm_metadata=True):
                     if failed_parts_2 is None:
                         continue
                     elif not failed_parts_2:
@@ -185,7 +187,7 @@ class MultipartUploadHandler:
         obj, created = hm.get_or_create_obj(table_name=bucket.get_bucket_table_name(), obj_path_name=key)
 
         obj_raods_key = obj.get_obj_key(bucket.id)
-        obj_rados = HarborObject(pool_name=bucket.pool_name, obj_id=obj_raods_key, obj_size=obj.si)
+        obj_rados = build_harbor_object(using=bucket.ceph_using, pool_name=bucket.pool_name, obj_id=obj_raods_key, obj_size=obj.si)
         if not created and obj.si != 0:  # 已存在的非空对象
             try:
                 hm._pre_reset_upload(bucket=bucket, obj=obj, rados=obj_rados)  # 重置对象大小
@@ -202,10 +204,11 @@ class MultipartUploadHandler:
             used_upload_parts=used_upload_parts, unused_upload_parts=unused_upload_parts))
 
     @staticmethod
-    def clear_parts_cache_iter(parts, is_rm_metadata=False):
+    def clear_parts_cache_iter(using: str, parts, is_rm_metadata=False):
         """
         清理part缓存，part rados数据或元数据
 
+        :param using: ceph集群别名
         :param parts: part元数据实例list或dict
         :param is_rm_metadata: True(删除元数据)；False(不删元数据)
         :return:
@@ -217,7 +220,7 @@ class MultipartUploadHandler:
 
         start_time = time.time()
         remove_failed_parts = []  # 删除元数据失败的part
-        part_rados = ObjectPart(part_key='', part_size=0)
+        part_rados = build_harbor_object_part(using=using, part_key='', part_size=0)
         for p in parts:
             if is_rm_metadata:
                 if not p.safe_delete():
@@ -251,7 +254,7 @@ class MultipartUploadHandler:
             offset = 0
             parts_count = len(complete_numbers)
 
-            part_rados = ObjectPart(part_key='')
+            part_rados = build_harbor_object_part(using=bucket.ceph_using, part_key='')
             for num in complete_numbers:
                 part = used_upload_parts[num]
                 for r in self.save_part_to_object_iter(obj=obj, obj_rados=obj_rados, part_rados=part_rados,
@@ -288,7 +291,8 @@ class MultipartUploadHandler:
 
             # 多部分上传已完成，清理数据
             # 删除无用的part元数据和rados数据
-            for r in self.clear_parts_cache_iter(unused_upload_parts, is_rm_metadata=True):
+            for r in self.clear_parts_cache_iter(using=bucket.ceph_using, parts=unused_upload_parts,
+                                                 is_rm_metadata=True):
                 if r is None:
                     if not yielded_doctype:
                         yielded_doctype = True
@@ -297,7 +301,8 @@ class MultipartUploadHandler:
                         yield white_space_bytes
 
             # 删除已组合的rados数据, 保留part元数据
-            for r in self.clear_parts_cache_iter(used_upload_parts, is_rm_metadata=False):
+            for r in self.clear_parts_cache_iter(using=bucket.ceph_using, parts=used_upload_parts,
+                                                 is_rm_metadata=False):
                 if r is None:
                     if not yielded_doctype:
                         yielded_doctype = True
@@ -816,4 +821,4 @@ class CopyObjectHandler:
     def build_object_rados(bucket, obj):
         pool_name = bucket.get_pool_name()
         obj_key = obj.get_obj_key(bucket.id)
-        return HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        return build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)

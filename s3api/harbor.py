@@ -3,9 +3,8 @@ from django.db.models import Case, Value, When, F
 from django.db.models import BigIntegerField
 
 from buckets.models import Bucket
-from .utils import BucketFileManagement
+from .utils import BucketFileManagement, build_harbor_object
 from utils.storagers import PathParser
-from utils.oss import HarborObject
 from . import exceptions
 from .managers import ObjectPartManager
 
@@ -848,7 +847,7 @@ class HarborManager:
 
         obj_key = obj.get_obj_key(bucket.id)
         pool_name = bucket.get_pool_name()
-        rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        rados = build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         ok, chunk = rados.read(offset=offset, size=size)
         if not ok:
             raise exceptions.S3InternalError('文件块读取失败')
@@ -910,7 +909,7 @@ class HarborManager:
         # 读取文件对象生成器
         obj_key = obj.get_obj_key(bucket.id)
         pool_name = bucket.get_pool_name()
-        rados = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        rados = build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         return rados.read_obj_generator(offset=offset, end=end, block_size=per_size)
 
     def get_write_generator(self, bucket_name: str, obj_path: str, user=None):
@@ -954,7 +953,7 @@ class HarborManager:
 
     def __write_generator(self, bucket, pool_name, obj_rados_key, obj, created):
         ok = True
-        rados = HarborObject(pool_name=pool_name, obj_id=obj_rados_key, obj_size=obj.si)
+        rados = build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_rados_key, obj_size=obj.si)
         if created is False:  # 对象已存在，不是新建的,重置对象大小
             self._pre_reset_upload(bucket=bucket, obj=obj, rados=rados)
 
@@ -1270,7 +1269,7 @@ class HarborManager:
             ObjectPartManager(parts_table_name=bucket.get_parts_table_name()).remove_object_parts(obj_id=old_id)
 
         pool_name = bucket.get_pool_name()
-        ho = HarborObject(pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
+        ho = build_harbor_object(using=bucket.ceph_using, pool_name=pool_name, obj_id=obj_key, obj_size=obj.si)
         ok, _ = ho.delete()
         if not ok:
             # 恢复元数据

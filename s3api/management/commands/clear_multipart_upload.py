@@ -15,8 +15,8 @@ from django.core.management.base import BaseCommand, CommandError
 from s3api.models import MultipartUpload, build_part_rados_key
 from s3api.managers import ObjectPartManager
 from s3api.handlers import MULTIPART_UPLOAD_MAX_SIZE
+from s3api.utils import build_harbor_object_part
 from buckets.models import Bucket, Archive, build_parts_tablename
-from utils.oss.pyrados import ObjectPart
 
 
 class Command(BaseCommand):
@@ -79,7 +79,11 @@ class Command(BaseCommand):
     def clear_uploads(self, uploads):
         for upload in uploads:
             parts_tablename = build_parts_tablename(upload.bucket_id)
-            self.clear_one_mulitipart(parts_tablename, upload)
+            bucket = Bucket.objects.filter(id=upload.bucket_id).first()
+            if bucket is None:
+                continue
+
+            self.clear_one_mulitipart(bucket=bucket, part_table_name=parts_tablename, upload=upload)
 
     def handle_by_bucket_name(self, bucket_name: str, clear_all: bool):
         # 删除归档的存储桶
@@ -104,7 +108,7 @@ class Command(BaseCommand):
             part_table_name = b.get_parts_table_name()
             qs = self.get_multipart_queryset(bucket=b, days_ago=self.days_ago)
             for upload in qs:
-                self.clear_one_mulitipart(part_table_name=part_table_name, upload=upload)
+                self.clear_one_mulitipart(bucket=b, part_table_name=part_table_name, upload=upload)
 
     @staticmethod
     def get_multipart_queryset(bucket=None, days_ago: int = 30):
@@ -119,10 +123,11 @@ class Command(BaseCommand):
         lookups['create_time__lt'] = datetime.utcnow() - timedelta(days=days_ago)
         return MultipartUpload.objects.filter(**lookups).order_by('create_time').all()
 
-    def clear_one_mulitipart(self, part_table_name: str, upload):
+    def clear_one_mulitipart(self, bucket, part_table_name: str, upload):
         """
         清理一个多部分上传
 
+        :param bucket: bucket instance
         :param part_table_name: part表名称
         :param upload: MultipartUpload()
         """
@@ -134,7 +139,7 @@ class Command(BaseCommand):
         except Exception as e:
             if e.args[0] == 1146:       # 数据库表不存在或已删除
                 self.stdout.write(self.style.SUCCESS(f'{str(e)}, try clear rados.'))
-                ok = self.try_clear_upload_part_rados(upload=upload)
+                ok = self.try_clear_upload_part_rados(ceph_using=bucket.ceph_using, upload=upload)
                 if ok:
                     if upload.safe_delete():
                         self.stdout.write(self.style.SUCCESS(f'OK deleted upload<{upload_id}>.'))
@@ -143,7 +148,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'Failed to delete upload<{upload_id}>.'))
             return False
 
-        failed_parts = self.clear_parts_cache(parts_qs)
+        failed_parts = self.clear_parts_cache(ceph_using=bucket.ceph_using, parts=parts_qs)
         if failed_parts:
             self.stdout.write(self.style.ERROR(f'Failed to delete upload<{upload_id}>.'))
         else:
@@ -155,7 +160,7 @@ class Command(BaseCommand):
                 return False
 
     @staticmethod
-    def try_clear_upload_part_rados(upload):
+    def try_clear_upload_part_rados(ceph_using, upload):
         """
         尝试清除可能的多部分上传的part rados数据
         :return:
@@ -163,7 +168,7 @@ class Command(BaseCommand):
             False   # 删除失败
         """
         not_exist_count = 0
-        part_rados = ObjectPart(part_key='', part_size=0)
+        part_rados = build_harbor_object_part(using=ceph_using, part_key='', part_size=0)
         for part_num in range(1, 10001):
             part_key = build_part_rados_key(upload_id=upload.id, part_num=part_num)
             part_rados.reset_part_key_and_size(part_key=part_key, part_size=MULTIPART_UPLOAD_MAX_SIZE)
@@ -181,16 +186,17 @@ class Command(BaseCommand):
                 not_exist_count = 0
 
     @staticmethod
-    def clear_parts_cache(parts):
+    def clear_parts_cache(ceph_using, parts):
         """
         清理part缓存，part rados数据或元数据
 
+        :param ceph_using: ceph集群配置别名
         :param parts: part元数据实例list或dict
         :return:
             [part]              # 删除失败的part元数据list
         """
         remove_failed_parts = []  # 删除元数据失败的part
-        part_rados = ObjectPart(part_key='', part_size=0)
+        part_rados = build_harbor_object_part(using=ceph_using, part_key='', part_size=0)
         for p in parts:
             part_rados.reset_part_key_and_size(part_key=p.get_part_rados_key(), part_size=p.size)
             ok, _ = part_rados.delete()
