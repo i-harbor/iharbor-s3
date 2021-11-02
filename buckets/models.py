@@ -7,7 +7,7 @@ from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from django.utils.translation import gettext_lazy, gettext as _
 from django.contrib.auth import get_user_model
-from django.db.models import F
+from django.db.models import F, Max
 
 from utils.md5 import EMPTY_HEX_MD5, get_str_hexMD5
 
@@ -18,6 +18,24 @@ def rand_hex_string(length=10):
 
 # 获取用户模型
 User = get_user_model()
+
+
+def get_next_bucket_max_id():
+    """
+    从现有桶，归档桶查询最大桶id, +1自增生成一个bucket id
+    """
+    next_id = 0
+    b = Bucket.objects.all().aggregate(b_id=Max('id'))
+    a = Archive.objects.all().aggregate(a_id=Max('original_id'))
+    a_id = a['a_id']
+    b_id = b['b_id']
+    if isinstance(a_id, int):
+        next_id = max(a_id, next_id)
+
+    if isinstance(b_id, int):
+        next_id = max(b_id, next_id)
+
+    return next_id + 1
 
 
 def build_parts_tablename(bucket_id):

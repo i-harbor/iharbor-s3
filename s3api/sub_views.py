@@ -16,7 +16,7 @@ from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
 from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
 from utils.oss.pyrados import RadosError
 from utils.time import datetime_from_gmt
-from buckets.models import BucketFileBase
+from buckets.models import BucketFileBase, get_next_bucket_max_id
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
@@ -200,12 +200,14 @@ class BucketViewSet(CustomGenericViewSet):
             return self.exception_response(
                 request, exceptions.S3InternalError(message=gettext('创建存储桶失败，选择ceph集群和pool时错误,') + str(e)))
 
-        bucket = Bucket(ceph_using=ceph_using, pool_name=pool_name, user=user, name=bucket_name,
-                        access_permission=perms, type=Bucket.TYPE_S3)
         try:
-            bucket.save()
+            bucket_id = get_next_bucket_max_id()
+            bucket = Bucket(id=bucket_id, ceph_using=ceph_using, pool_name=pool_name, user=user, name=bucket_name,
+                            access_permission=perms, type=Bucket.TYPE_S3)
+            bucket.save(force_insert=True)
         except Exception as e:
-            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶元数据错误'), extend_msg=str(e)))
+            return self.exception_response(request, exceptions.S3InternalError(
+                message=gettext('创建存储桶失败，存储桶元数据错误'), extend_msg=str(e)))
 
         col_name = bucket.get_bucket_table_name()
         bfm = BucketFileManagement(collection_name=col_name)
@@ -213,7 +215,8 @@ class BucketViewSet(CustomGenericViewSet):
         if not create_table_for_model_class(model=model_class):
             bucket.delete()
             delete_table_for_model_class(model=model_class)
-            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶object表错误')))
+            return self.exception_response(request, exceptions.S3InternalError(
+                message=gettext('创建存储桶失败，存储桶object表错误')))
 
         part_table_name = bucket.get_parts_table_name()
         parts_class = get_parts_model_class(table_name=part_table_name)
@@ -221,7 +224,8 @@ class BucketViewSet(CustomGenericViewSet):
             bucket.delete()
             delete_table_for_model_class(model=parts_class)
             delete_table_for_model_class(model=model_class)
-            return self.exception_response(request, exceptions.S3InternalError(message=gettext('创建存储桶失败，存储桶parts表错误')))
+            return self.exception_response(request, exceptions.S3InternalError(
+                message=gettext('创建存储桶失败，存储桶parts表错误')))
 
         return Response(status=status.HTTP_200_OK, headers={'Location': '/' + bucket_name})
 
@@ -235,7 +239,8 @@ class BucketViewSet(CustomGenericViewSet):
             return self.list_objects_v2_list_prefix(request=request, prefix=prefix)
 
         if delimiter != '/':
-            return self.exception_response(request, exceptions.S3InvalidArgument(message=gettext('参数“delimiter”必须是“/”')))
+            return self.exception_response(request, exceptions.S3InvalidArgument(
+                message=gettext('参数“delimiter”必须是“/”')))
 
         path = prefix.strip('/')
         if prefix and not path:     # prefix invalid, return no match data

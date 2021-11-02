@@ -183,7 +183,7 @@ def create_table_for_model_class(model, ):
             schema_editor.create_model(model)
             if issubclass(model, BucketFileBase):
                 try:
-                    table_name = schema_editor.quote_name(model.Meta.db_table)
+                    table_name = schema_editor.quote_name(model._meta.db_table)
                     sql1 = f"ALTER TABLE {table_name} CHANGE COLUMN `na` `na` LONGTEXT NOT " \
                            f"NULL COLLATE 'utf8_bin' AFTER `id`;"
                     sql2 = f"ALTER TABLE {table_name} CHANGE COLUMN `name` `name` VARCHAR(255) " \
