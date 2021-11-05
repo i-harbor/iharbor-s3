@@ -13,7 +13,6 @@ from django.apps import apps
 from django.conf import settings
 
 from buckets.models import BucketFileBase, get_str_hexMD5
-from utils.oss.pyrados import HarborObject, ObjectPart, RadosError
 
 
 logger = logging.getLogger('django.request')
@@ -21,107 +20,6 @@ logger = logging.getLogger('django.request')
 
 class InvalidPathError(Exception):
     pass
-
-
-def build_harbor_object(using: str, pool_name: str, obj_id: str, obj_size: int = 0):
-    """
-    构建iharbor对象对应的ceph读写接口
-
-    :param using: ceph集群配置别名，对应对象数据所在ceph集群
-    :param pool_name: ceph存储池名称，对应对象数据所在存储池名称
-    :param obj_id: 对象在ceph存储池中对应的rados名称
-    :param obj_size: 对象的大小
-    """
-    cephs = settings.CEPH_RADOS
-    if using not in cephs:
-        raise RadosError(f'别名为"{using}"的CEPH集群信息未配置，请确认配置文件中的“CEPH_RADOS”配置内容')
-
-    ceph = cephs[using]
-    cluster_name = ceph['CLUSTER_NAME']
-    user_name = ceph['USER_NAME']
-    conf_file = ceph['CONF_FILE_PATH']
-    keyring_file = ceph['KEYRING_FILE_PATH']
-    return HarborObject(pool_name=pool_name, obj_id=obj_id, obj_size=obj_size, cluster_name=cluster_name,
-                        user_name=user_name, conf_file=conf_file, keyring_file=keyring_file)
-
-
-def build_harbor_object_part(using: str, part_key: str, part_size: int = 0, pool_name: str = None):
-    """
-    构建iharbor对象多部份上传part对应的ceph读写接口
-
-    :param using: ceph集群配置别名，对应对象数据所在ceph集群
-    :param pool_name: ceph存储池名称，对应对象数据所在存储池名称
-    :param part_key: 对象part在ceph存储池中对应的rados名称
-    :param part_size: 对象的part大小
-    """
-    cephs = settings.CEPH_RADOS
-    if using not in cephs:
-        raise RadosError(f'别名为"{using}"的CEPH集群信息未配置，请确认配置文件中的“CEPH_RADOS”配置内容')
-
-    ceph = cephs[using]
-    cluster_name = ceph['CLUSTER_NAME']
-    user_name = ceph['USER_NAME']
-    conf_file = ceph['CONF_FILE_PATH']
-    keyring_file = ceph['KEYRING_FILE_PATH']
-    if not pool_name:
-        pool_name = ceph['MULTIPART_POOL_NAME']
-    return ObjectPart(pool_name=pool_name, part_key=part_key, part_size=part_size, cluster_name=cluster_name,
-                        user_name=user_name, conf_file=conf_file, keyring_file=keyring_file)
-
-
-def check_ceph_settins():
-    def raise_msg(msg):
-        print(msg)
-        raise Exception(msg)
-
-    cephs = getattr(settings, 'CEPH_RADOS', None)
-    if not cephs:
-        raise_msg('未配置CEPH集群信息，配置文件中配置“CEPH_RADOS”')
-
-    if 'default' not in cephs:
-        raise_msg('配置文件中CEPH集群信息配置“CEPH_RADOS”中必须存在一个别名“default”')
-
-    enable_choices = []
-    for using in cephs:
-        if len(using) >= 16:
-            raise_msg(f'CEPH集群配置“CEPH_RADOS”中，别名"{using}"太长，不能超过16字符')
-
-        ceph = cephs[using]
-        conf_file = ceph['CONF_FILE_PATH']
-        if not os.path.exists(conf_file):
-            raise_msg(f'别名为“{using}”的CEPH集群配置文件“{conf_file}”不存在')
-
-        keyring_file = ceph['KEYRING_FILE_PATH']
-        if not os.path.exists(keyring_file):
-            raise_msg(f'别名为“{using}”的CEPH集群keyring配置文件“{keyring_file}”不存在')
-
-        if 'USER_NAME' not in ceph:
-            raise_msg(f'别名为“{using}”的CEPH集群配置信息未设置“USER_NAME”')
-
-        if 'POOL_NAME' not in ceph:
-            raise_msg(f'别名为“{using}”的CEPH集群配置信息未设置“POOL_NAME”')
-
-        if not (isinstance(ceph['POOL_NAME'], str) or isinstance(ceph['POOL_NAME'], tuple)):
-            raise_msg(f'别名为“{using}”的CEPH集群配置信息“POOL_NAME”必须是str或者tuple')
-
-        if 'MULTIPART_POOL_NAME' not in ceph:
-            raise_msg(f'别名为“{using}”的CEPH集群配置信息未设置“MULTIPART_POOL_NAME”')
-
-        ho = build_harbor_object(using=using, pool_name='', obj_id='')
-        try:
-            with ho.rados:
-                pass
-        except Exception as e:
-            raise_msg(f'别名为“{using}”的CEPH集群连接错误，{str(e)}')
-
-        if ('DISABLE_CHOICE' in ceph) and (ceph['DISABLE_CHOICE'] is True):
-            continue
-
-        enable_choices.append(using)
-
-    if not enable_choices:
-        raise_msg('没有可供选择的CEPH集群配置，创建bucket时没有可供选择的CEPH集群，'
-                  '请至少确保有一个CEPH集群配置“DISABLE_CHOICE”为False')
 
 
 def get_ceph_alias_rand():

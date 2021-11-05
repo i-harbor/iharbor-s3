@@ -8,7 +8,7 @@ from django.db.utils import ProgrammingError
 from s3api.utils import BucketFileManagement, delete_table_for_model_class
 from buckets.models import Archive
 from s3api.managers import get_parts_model_class
-from s3api.utils import build_harbor_object
+from utils.oss.pyrados import build_harbor_object
 
 
 class Command(BaseCommand):

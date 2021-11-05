@@ -16,7 +16,7 @@ from .harbor import HarborManager
 from . import renders
 from . import paginations
 from . import serializers
-from .utils import build_harbor_object, build_harbor_object_part
+from utils.oss.pyrados import build_harbor_object, build_harbor_object_part
 
 
 MULTIPART_UPLOAD_MAX_SIZE = getattr(settings, 'S3_MULTIPART_UPLOAD_MAX_SIZE', 2 * 1024 ** 3)        # default 2GB

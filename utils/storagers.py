@@ -6,7 +6,7 @@ from django.utils.translation import gettext
 
 from utils.oss.pyrados import FileWrapper, RadosError
 from utils.md5 import FileMD5Handler, Sha256Handler
-from s3api.utils import build_harbor_object, build_harbor_object_part
+from utils.oss.pyrados import build_harbor_object, build_harbor_object_part
 
 
 class ParseDecodeBase64Error(Exception):

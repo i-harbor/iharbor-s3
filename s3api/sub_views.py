@@ -14,14 +14,14 @@ from rest_framework.parsers import FileUploadParser
 from buckets.models import Bucket
 from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
 from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
-from utils.oss.pyrados import RadosError
+from utils.oss.pyrados import RadosError, build_harbor_object
 from utils.time import datetime_from_gmt
 from buckets.models import BucketFileBase, get_next_bucket_max_id
 from . import renders
 from .viewsets import CustomGenericViewSet
 from .validators import DNSStringValidator, bucket_limit_validator
 from .utils import (get_ceph_poolname_rand, BucketFileManagement, create_table_for_model_class,
-                    delete_table_for_model_class, build_harbor_object, get_ceph_alias_rand)
+                    delete_table_for_model_class, get_ceph_alias_rand)
 from . import exceptions
 from .harbor import HarborManager
 from . import serializers

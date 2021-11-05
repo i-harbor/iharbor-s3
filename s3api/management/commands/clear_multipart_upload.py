@@ -15,7 +15,7 @@ from django.core.management.base import BaseCommand, CommandError
 from s3api.models import MultipartUpload, build_part_rados_key
 from s3api.managers import ObjectPartManager
 from s3api.handlers import MULTIPART_UPLOAD_MAX_SIZE
-from s3api.utils import build_harbor_object_part
+from utils.oss.pyrados import build_harbor_object_part
 from buckets.models import Bucket, Archive, build_parts_tablename
 
 

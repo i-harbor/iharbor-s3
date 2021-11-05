@@ -3,10 +3,11 @@ from django.db.models import Case, Value, When, F
 from django.db.models import BigIntegerField
 
 from buckets.models import Bucket
-from .utils import BucketFileManagement, build_harbor_object
+from utils.oss.pyrados import build_harbor_object
 from utils.storagers import PathParser
 from . import exceptions
 from .managers import ObjectPartManager
+from .utils import BucketFileManagement
 
 
 class HarborManager:
