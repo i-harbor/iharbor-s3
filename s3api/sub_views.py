@@ -12,7 +12,7 @@ from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.parsers import FileUploadParser
 
 from buckets.models import Bucket
-from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler
+from utils.storagers import FileUploadToCephHandler, PartUploadToCephHandler, try_close_file
 from utils.md5 import EMPTY_BYTES_MD5, EMPTY_HEX_MD5, FileMD5Handler
 from utils.oss.pyrados import RadosError, build_harbor_object
 from utils.time import datetime_from_gmt
@@ -928,6 +928,9 @@ class ObjViewSet(CustomGenericViewSet):
         def clean_put(_uploader, _obj, _created):
             # 删除数据和元数据
             f = getattr(_uploader, 'file', None)
+            if f is not None:
+                try_close_file(f)
+
             s = f.size if f else 0
             try:
                 rados.delete(obj_size=s)
@@ -987,6 +990,8 @@ class ObjViewSet(CustomGenericViewSet):
             # 删除数据和元数据
             clean_put(uploader, obj, created)
             return self.exception_response(request, exceptions.S3InternalError('更新对象元数据错误'))
+
+        try_close_file(file)
 
         headers = {'ETag': obj_md5}
         x_amz_acl = request.headers.get('x-amz-acl', None)
@@ -1170,6 +1175,7 @@ class ObjViewSet(CustomGenericViewSet):
             # 删除数据
             f = getattr(_uploader, 'file', None)
             if f is not None:
+                try_close_file(f)
                 try:
                     f.delete()
                 except Exception:

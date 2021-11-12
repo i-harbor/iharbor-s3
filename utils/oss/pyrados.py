@@ -1007,6 +1007,9 @@ class FileWrapper:
     def delete(self):
         self._ho.delete()
 
+    def __del__(self):
+        self.close()
+
 
 class ObjectPart(HarborObject):
     """

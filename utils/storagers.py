@@ -9,6 +9,16 @@ from utils.md5 import FileMD5Handler, Sha256Handler
 from utils.oss.pyrados import build_harbor_object, build_harbor_object_part
 
 
+def try_close_file(f):
+    try:
+        if hasattr(f, 'close'):
+            f.close()
+    except Exception as e:
+        return False
+
+    return True
+
+
 class ParseDecodeBase64Error(Exception):
     default_status_code = 400
     default_code = "DecodeBase64Error"
