@@ -8,9 +8,10 @@
 #     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "s3server.settings")
 #     django.setup()  # 加载项目配置
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from s3api.models import MultipartUpload, build_part_rados_key
 from s3api.managers import ObjectPartManager
@@ -39,7 +40,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--days-ago', default='30', dest='days-ago', type=int,
-            help='Clear objects and directories that have been deleted more than days ago.',
+            help='Clear multipart uploads that have been created more than days ago.',
         )
 
     def handle(self, *args, **options):
@@ -55,7 +56,7 @@ class Command(BaseCommand):
         bucket_name = options['bucket_name']
         clear_all = options['clear_all']
 
-        if input('Are you sure to create the table?\n\n' + "Type 'yes' to continue, or 'no' to cancel: ") != 'yes':
+        if input("Are you sure to clear multipart upload?\n\n Type 'yes' to continue, or 'no' to cancel: ") != 'yes':
             raise CommandError("cancelled.")
 
         if bucket_name:
@@ -72,18 +73,36 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f'开始清理{length}个归档存储桶.'))
             self.clear_buckets(buckets)
 
-        qs = self.get_multipart_queryset(days_ago=self.days_ago)
-        for uploads in self.chunk_queryset(qs, 1):
-            self.clear_uploads(uploads)
+        create_time_gt = None
+        while True:
+            qs = self.get_multipart_queryset(days_ago=self.days_ago, create_time_gt=create_time_gt)
+            uploads = qs[:100]
+            if not uploads:
+                break
+
+            r = self.clear_uploads(uploads)
+            if r:
+                create_time_gt = r.create_time
+
+            if create_time_gt is None:
+                break
 
     def clear_uploads(self, uploads):
+        last_upload = None
         for upload in uploads:
             parts_tablename = build_parts_tablename(upload.bucket_id)
-            bucket = Bucket.objects.filter(id=upload.bucket_id).first()
+            bucket_id = upload.bucket_id
+            bucket_name = upload.bucket_name
+            bucket = Bucket.objects.filter(id=bucket_id, name=bucket_name).first()
             if bucket is None:
+                self.stdout.write(self.style.WARNING(
+                    f'Not found bucket(id={bucket_id}, name={bucket_name}), Failed to clear upload<{upload.id}>.'))
                 continue
 
             self.clear_one_mulitipart(bucket=bucket, part_table_name=parts_tablename, upload=upload)
+            last_upload = upload
+
+        return last_upload
 
     def handle_by_bucket_name(self, bucket_name: str, clear_all: bool):
         # 删除归档的存储桶
@@ -111,7 +130,7 @@ class Command(BaseCommand):
                 self.clear_one_mulitipart(bucket=b, part_table_name=part_table_name, upload=upload)
 
     @staticmethod
-    def get_multipart_queryset(bucket=None, days_ago: int = 30):
+    def get_multipart_queryset(bucket=None, days_ago: int = 30, create_time_gt=None):
         lookups = {}
         if isinstance(bucket, Bucket):
             lookups['bucket_name'] = bucket.name
@@ -120,7 +139,9 @@ class Command(BaseCommand):
             lookups['bucket_name'] = bucket.name
             lookups['bucket_id'] = bucket.original_id
 
-        lookups['create_time__lt'] = datetime.utcnow() - timedelta(days=days_ago)
+        lookups['create_time__lt'] = timezone.now() - timedelta(days=days_ago)
+        if create_time_gt:
+            lookups['create_time__gt'] = create_time_gt
         return MultipartUpload.objects.filter(**lookups).order_by('create_time').all()
 
     def clear_one_mulitipart(self, bucket, part_table_name: str, upload):
@@ -228,15 +249,6 @@ class Command(BaseCommand):
             return Archive.objects.filter(name=name, type=Archive.TYPE_S3).all()
 
         return Archive.objects.filter(type=Archive.TYPE_S3).all()
-
-    @staticmethod
-    def chunk_queryset(qs, num_per: int = 1000):
-        while True:
-            r = qs.all()[:num_per]
-            if len(r) > 0:
-                yield r
-            else:
-                break
 
 
 # if __name__ == "__main__":

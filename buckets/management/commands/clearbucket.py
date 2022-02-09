@@ -9,13 +9,14 @@ from s3api.utils import BucketFileManagement, delete_table_for_model_class
 from buckets.models import Archive
 from s3api.managers import get_parts_model_class
 from utils.oss.pyrados import build_harbor_object
+from s3api.models import MultipartUpload
 
 
 class Command(BaseCommand):
     """
     清理bucket命令，清理满足彻底删除条件的对象和目录
     """
-    pool_sem = threading.Semaphore(100)  # 定义最多同时启用多少个线程
+    pool_sem = threading.Semaphore(10)  # 定义最多同时启用多少个线程
 
     help = 'Really delete objects and directories that have been deleted from a bucket'
     _clear_datetime = None
@@ -35,8 +36,18 @@ class Command(BaseCommand):
             '--all-deleted', default=None, nargs='?', dest='all_deleted', const=True,
             help='All buckets that have been deleted will be clearing.',
         )
+        parser.add_argument(
+            '--max-threads', default=10, dest='max-threads', type=int,
+            help='max threads on multithreading mode.',
+        )
 
     def handle(self, *args, **options):
+        max_threads = options.get('max-threads')
+        if not max_threads or max_threads < 1:
+            raise CommandError(f"Clearing buckets cancelled. invalid value of 'max-threads', {max_threads}")
+
+        self.pool_sem = threading.Semaphore(max_threads)  # 定义最多同时启用多少个线程
+
         days_ago = options.get('days-ago', 30)
         try:
             days_ago = int(days_ago)
@@ -48,7 +59,7 @@ class Command(BaseCommand):
         self._clear_datetime = timezone.now() - timedelta(days=days_ago)
 
         buckets = self.get_buckets(**options)
-
+        self.stdout.write(self.style.NOTICE(f'days-ago: {days_ago}, max threads {max_threads}'))
         if input('Are you sure you want to do this?\n\n' + "Type 'yes' to continue, or 'no' to cancel: ") != 'yes':
             raise CommandError("Clearing buckets cancelled.")
 
@@ -121,6 +132,12 @@ class Command(BaseCommand):
 
         return False
 
+    def thread_clear_one_bucket(self, bucket):
+        try:
+            self.clear_one_bucket(bucket)
+        finally:
+            self.pool_sem.release()  # 可用线程数+1
+
     def clear_one_bucket(self, bucket):
         """
         清除一个bucket中满足删除条件的对象和目录
@@ -162,6 +179,12 @@ class Command(BaseCommand):
 
             # 如果bucket对应表没有对象了，删除bucket和表
             if model_class.objects.filter(fod=True).count() == 0:
+                # 如果有多部份上传未清理，不能删除桶
+                if self.has_multipart_upload(bucket):
+                    self.stdout.write(self.style.WARNING(
+                        f"Ok clear bucket({bucket.name}), but not delete bucket, has multipart upload need to clear."))
+                    return
+
                 ok = delete_table_for_model_class(model_class)       # delete bucket table
                 if ok and self.delete_bucket_and_part_table(bucket):
                     self.stdout.write(self.style.WARNING(f"deleted bucket and it's table, part table:{bucket.name}"))
@@ -176,8 +199,6 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.SUCCESS('Clearing bucket named {0} is completed'.format(bucket.name)))
             else:
                 self.stdout.write(self.style.ERROR(f'deleted bucket({bucket.name}) error: {e}'))
-
-        self.pool_sem.release()     # 可用线程数+1
 
     @staticmethod
     def delete_bucket_and_part_table(bucket):
@@ -198,7 +219,7 @@ class Command(BaseCommand):
         """
         for bucket in buckets:
             if self.pool_sem.acquire():     # 可用线程数-1，控制线程数量，当前正在运行线程数量达到上限会阻塞等待
-                worker = threading.Thread(target=self.clear_one_bucket, kwargs={'bucket': bucket})
+                worker = threading.Thread(target=self.thread_clear_one_bucket, kwargs={'bucket': bucket})
                 worker.start()
 
         # 等待所有线程结束
@@ -208,3 +229,14 @@ class Command(BaseCommand):
                 break
 
         self.stdout.write(self.style.SUCCESS('Successfully clear {0} buckets'.format(buckets.count())))
+
+    @staticmethod
+    def get_multipart_queryset(bucket: Archive):
+        lookups = {}
+        lookups['bucket_name'] = bucket.name
+        lookups['bucket_id'] = bucket.original_id
+        return MultipartUpload.objects.filter(**lookups).all()
+
+    def has_multipart_upload(self, bucket: Archive):
+        qs = self.get_multipart_queryset(bucket)
+        return qs.exists()
