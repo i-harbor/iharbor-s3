@@ -1,7 +1,7 @@
 asgiref==3.3.4
 concurrent-log-handler==0.9.16
 defusedxml==0.7.1
-Django==3.2.2
+Django==3.2.14
 django-cors-headers==3.7.0
 django-hosts==4.0
 djangorestframework==3.12.4
